@@ -89,6 +89,13 @@ Todo cap and executor nudging are configured in `prewalk.json` (`maxTodos`, `nud
 
 Deliberate difference from the article: the swap does not happen *mid-turn* at the first edit, but at end of turn — the frontier prompt forces the model to stop right after task #1 with the ⏸️ PAUSE todo (the hermes-prewalk approach). Reliably interrupting a turn mid-flight is not exposed by the V1 API, and the checkpoint is more robust anyway.
 
+### Small-task guardrails
+
+Prewalk only pays off when there is real work left to hand off. Two guardrails handle tasks below that threshold:
+
+- **Prompt-level escape**: the frontier instruction tells the model to skip the protocol entirely if the task fits in one or two small edits — it just completes the task, with no todo list and no PAUSE.
+- **Plugin-level skip**: at the end of the frontier turn, if 0 todos remain the run is closed ("no handoff needed"); if exactly 1 remains, the handoff is skipped and the task finishes on the current model (in auto mode the plugin sends the continue prompt itself, without a model override).
+
 ## Known limitations / things to verify on your version
 
 1. **Pruning depends on `experimental.chat.system.transform`, which is, well, experimental.** If it doesn't fire on your build, the frontier never receives the planning instruction. Quick test: run `/prewalk` on a toy task and check that the model creates the todo list and stops at PAUSE. Fallback: create `.opencode/command/prewalk.md` manually with the planning instruction inline in the template (losing the pruning — the same trade-off hermes-prewalk made).
