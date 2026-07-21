@@ -1,0 +1,6 @@
+{
+  "frontier": "anthropic/claude-opus-4-8",
+  "executor": "openrouter/deepseek/deepseek-chat",
+  "maxTodos": 12,
+  "nudge": false
+}
