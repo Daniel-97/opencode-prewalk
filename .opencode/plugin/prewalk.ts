@@ -58,6 +58,8 @@ interface PrewalkDefaults {
   nudge: boolean
 }
 
+const VERSION = "0.1.0"
+
 const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit"])
 const MARKER = "[prewalk]"
 
@@ -166,7 +168,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
 
   const modelLabel = (m?: ModelRef) => (m ? `${m.providerID}/${m.modelID}` : "?")
 
-  await log("info", "prewalk plugin loaded", { defaults: defaults as any })
+  await log("info", "prewalk plugin loaded", { version: VERSION, defaults: defaults as any })
 
   return {
     // -----------------------------------------------------------------------
