@@ -6,34 +6,45 @@ The idea in one line: an agent's cost is in the **reads**, not the edits. Instea
 
 ## Installation
 
-### Via script (recommended)
+One file to copy. Per project:
 
 ```sh
-./install.sh                 # into ./.opencode of the current project
-./install.sh --global        # into ~/.config/opencode (all projects)
-./install.sh --project DIR   # into DIR/.opencode
+mkdir -p .opencode/plugin
+cp plugin/prewalk.ts .opencode/plugin/prewalk.ts
 ```
 
-The script is idempotent (existing files are backed up to `.bak`) and works both from a repo checkout and via `curl | bash` once the repo is published (edit `RAW_BASE` in `install.sh`, or set `PREWALK_RAW_BASE`).
+Or globally (all projects):
 
-### Manual
+```sh
+mkdir -p ~/.config/opencode/plugin
+cp plugin/prewalk.ts ~/.config/opencode/plugin/prewalk.ts
+```
+
+Without a checkout, download it straight from the repo:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/CHANGE-ME/opencode-prewalk/main/plugin/prewalk.ts \
+  -o .opencode/plugin/prewalk.ts
+```
+
+Resulting layout:
 
 ```
 your-project/
-├── .opencode/
-│   ├── plugin/
-│   │   └── prewalk.ts        ← copy from plugin/prewalk.ts
-│   └── prewalk.json          ← optional, see below
+└── .opencode/
+    ├── plugin/
+    │   └── prewalk.ts
+    └── prewalk.json          ← optional, see below
 ```
 
-For global use: `~/.config/opencode/plugin/`. The `/prewalk` command (alias `/pw`) is **registered programmatically by the plugin** through the V1 `config` hook at startup — there is no separate command file to install.
+The `/prewalk` command (alias `/pw`) is **registered programmatically by the plugin** through the V1 `config` hook at startup — there is no separate command file to install. Restart OpenCode after installing.
 
 
 ### Frontier model: pinning is optional
 
 If `"frontier"` is not set, planning runs on whatever model is active in the session. Pinning it is still recommended: after an auto-swap the session may stay on the executor model, and a second `/prewalk` would then plan on the cheap model — the exact inversion of the technique. What matters is only that the planning model is meaningfully stronger than the executor.
 
-Optional config `.opencode/prewalk.json`:
+Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this repo):
 
 ```json
 {
