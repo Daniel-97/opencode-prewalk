@@ -8,19 +8,16 @@ The idea in one line: an agent's cost is in the **reads**, not the edits. Instea
 
 ## Installation
 
-Copy the three files to your project and restart OpenCode.
+Clone the repo anywhere, then copy the `plugin` and `agent` directories into your `.opencode/`:
 
 ```sh
-repo=https://github.com/Daniel-97/opencode-prewalk.git
-git clone "$repo" /tmp/opencode-prewalk
-mkdir -p .opencode/plugin .opencode/agent
-cp /tmp/opencode-prewalk/.opencode/plugin/prewalk.ts           .opencode/plugin/
-cp /tmp/opencode-prewalk/.opencode/agent/prewalk-frontier.md   .opencode/agent/
-cp /tmp/opencode-prewalk/.opencode/agent/prewalk-executor.md   .opencode/agent/
-rm -rf /tmp/opencode-prewalk
+git clone --depth 1 https://github.com/Daniel-97/opencode-prewalk.git
+mkdir -p .opencode
+cp -r opencode-prewalk/.opencode/plugin opencode-prewalk/.opencode/agent .opencode/
+rm -rf opencode-prewalk
 ```
 
-Or download directly without cloning:
+Or download each file individually:
 
 ```sh
 mkdir -p .opencode/plugin .opencode/agent
@@ -30,7 +27,7 @@ curl -fsSL "$base/.opencode/agent/prewalk-frontier.md"  -o .opencode/agent/prewa
 curl -fsSL "$base/.opencode/agent/prewalk-executor.md"  -o .opencode/agent/prewalk-executor.md
 ```
 
-The `/prewalk` command (alias `/pw`) is registered automatically by the plugin at startup — no command file needed. Restart OpenCode after installing.
+The `/prewalk` command (alias `/pw`) is registered automatically at startup — restart OpenCode after installing.
 
 Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this repo):
 
