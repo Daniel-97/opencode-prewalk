@@ -8,53 +8,29 @@ The idea in one line: an agent's cost is in the **reads**, not the edits. Instea
 
 ## Installation
 
-Three files to copy: the plugin plus the two prewalk agents (the agents carry the
-baked-in system prompts and pinned models for each phase — they are an integral
-part of the mechanism, not just the plugin). Clone this repo and copy from your
-local checkout — per project:
+Copy the three files to your project and restart OpenCode.
 
 ```sh
-git clone https://github.com/Daniel-97/opencode-prewalk.git
+repo=https://github.com/Daniel-97/opencode-prewalk.git
+git clone "$repo" /tmp/opencode-prewalk
 mkdir -p .opencode/plugin .opencode/agent
-cp opencode-prewalk/.opencode/plugin/prewalk.ts .opencode/plugin/prewalk.ts
-cp opencode-prewalk/.opencode/agent/prewalk-frontier.md  .opencode/agent/prewalk-frontier.md
-cp opencode-prewalk/.opencode/agent/prewalk-executor.md  .opencode/agent/prewalk-executor.md
+cp /tmp/opencode-prewalk/.opencode/plugin/prewalk.ts           .opencode/plugin/
+cp /tmp/opencode-prewalk/.opencode/agent/prewalk-frontier.md   .opencode/agent/
+cp /tmp/opencode-prewalk/.opencode/agent/prewalk-executor.md   .opencode/agent/
+rm -rf /tmp/opencode-prewalk
 ```
 
-Or globally (all projects):
-
-```sh
-mkdir -p ~/.config/opencode/plugin ~/.config/opencode/agent
-cp opencode-prewalk/.opencode/plugin/prewalk.ts           ~/.config/opencode/plugin/prewalk.ts
-cp opencode-prewalk/.opencode/agent/prewalk-frontier.md   ~/.config/opencode/agent/prewalk-frontier.md
-cp opencode-prewalk/.opencode/agent/prewalk-executor.md   ~/.config/opencode/agent/prewalk-executor.md
-```
-
-Without a checkout, download them straight from the repo:
+Or download directly without cloning:
 
 ```sh
 mkdir -p .opencode/plugin .opencode/agent
 base=https://raw.githubusercontent.com/Daniel-97/opencode-prewalk/main
-curl -fsSL "$base/.opencode/plugin/prewalk.ts"           -o .opencode/plugin/prewalk.ts
-curl -fsSL "$base/.opencode/agent/prewalk-frontier.md"    -o .opencode/agent/prewalk-frontier.md
-curl -fsSL "$base/.opencode/agent/prewalk-executor.md"    -o .opencode/agent/prewalk-executor.md
+curl -fsSL "$base/.opencode/plugin/prewalk.ts"         -o .opencode/plugin/prewalk.ts
+curl -fsSL "$base/.opencode/agent/prewalk-frontier.md"  -o .opencode/agent/prewalk-frontier.md
+curl -fsSL "$base/.opencode/agent/prewalk-executor.md"  -o .opencode/agent/prewalk-executor.md
 ```
 
-Resulting layout:
-
-```
-your-project/
-└── .opencode/
-    ├── agent/
-    │   ├── prewalk-frontier.md
-    │   └── prewalk-executor.md
-    ├── plugin/
-    │   └── prewalk.ts
-    └── prewalk.json          ← optional, see below
-```
-
-The `/prewalk` command (alias `/pw`) is **registered programmatically by the plugin** through the V1 `config` hook at startup — it is configured to start on the `prewalk-frontier` agent (so a `/prewalk` always plans on the strong model, even if the session is currently on the executor). There is no separate command file to install. Restart OpenCode after installing.
-
+The `/prewalk` command (alias `/pw`) is registered automatically by the plugin at startup — no command file needed. Restart OpenCode after installing.
 
 ### Pinning the phase models
 
@@ -91,37 +67,12 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 
 The todo cap and the confirmation set are configured in `prewalk.json` (`maxTodos`, `confirmations`), not via flags. The executor model is pinned in `prewalk-executor.md`, not selected by a flag.
 
-## How it works (hook mapping)
-
-| Mechanism from the article | Implementation |
-|---|---|
-| `/prewalk` slash command (+ alias `/pw`) | Registered programmatically at startup via the stable V1 `config` hook — no markdown command file; it is wired to the `prewalk-frontier` agent, so it always starts planning on the strong model |
-| "Hidden" planning instruction | Baked into the **system prompt of the `prewalk-frontier` agent** (`.opencode/agent/prewalk-frontier.md`). It never enters message history |
-| Pruning the instruction at swap time | Phase swap = switching the session to the `prewalk-executor` agent, whose own system prompt (`.opencode/agent/prewalk-executor.md`: strict order, one todo at a time, per-item verification, no batch-completion) replaces the frontier's. There is no runtime injection or pruning hook |
-| Swap gate = todo list + first edit | When the frontier adds the ⏸️ checkpoint todo, detected via the stable `todo.updated` event (recognized by the leading `⏸️` marker in the todo content), the plugin pauses the session |
-| Swap moment | Manual mode: a confirmation user message (stable `message.updated` event) swaps via `client.session.prompt` with `agent: "prewalk-executor"` and the executor's pinned model. Auto mode (`--no-pause`): the swap fires immediately when the ⏸️ todo appears |
-| Revision at the checkpoint | A non-confirmation user message is left for the `prewalk-frontier` agent (the session is still on it) to revise the plan; the session stays paused until a confirmation arrives |
-| Session lifecycle | `session.created` initializes per-session state, `session.deleted` clears it, so abandoned sessions don't accumulate |
-| Todo list steering | OpenCode's todo tool persists across the agent switch within the same session |
-
-Deliberate difference from the article: the swap does not happen *mid-turn* at the first edit, but at the end of the frontier turn — the frontier prompt forces the model to stop right after task #1 with the ⏸️ checkpoint todo (the hermes-prewalk approach). Reliably interrupting a turn mid-flight is not exposed by the stable API, and the checkpoint is more robust anyway.
-
-### Small-task guardrails
+## Small-task guardrails
 
 Prewalk only pays off when there is real work left to hand off. Two guardrails handle tasks below that threshold:
 
 - **Prompt-level escape**: the frontier instruction tells the model to skip the protocol entirely if the task fits in one or two small edits — it just completes the task, with no todo list and no PAUSE.
 - **Plugin-level skip**: when the ⏸️ checkpoint todo is added, if 0 todos remain the run is closed ("no handoff needed"); if exactly 1 remains, the handoff is skipped and the task finishes on the current agent (no swap).
-
-## Known limitations / things to verify on your version
-
-1. **The two agent files are required.** The mechanism depends on the `prewalk-frontier` and `prewalk-executor` agents existing (in `.opencode/agent/` or `~/.config/opencode/agent/`). If they are missing, `/prewalk` will have no agent to run on. Quick test: run `/prewalk` on a toy task and check that the model creates the todo list and stops at the ⏸️ checkpoint.
-2. **The `/prewalk` command is injected at startup via the V1 `config` hook.** If `/prewalk` doesn't show up, that hook isn't firing on your build — define the command yourself as a markdown file with `agent: prewalk-frontier` and template `$ARGUMENTS`. Changes to the agent files or `prewalk.json` are picked up on the next OpenCode restart.
-3. **Confirmations are matched exactly.** At the ⏸️ checkpoint a user message is a confirmation only if, after trimming and lowercasing, it is in the `confirmations` set from `prewalk.json` (empty, `continue`, `ok`, … by default). Anything else — including "continue." with a period — is treated as a revision request and stays on the frontier agent. Add the variants you want to the `confirmations` list.
-4. **Hook signatures**: if something doesn't hook up, check the logs (service `prewalk`, via `client.app.log`).
-5. **In-memory state**: the state machine lives in the process; restarting OpenCode mid-prewalk loses it (the todo list in the context survives, though — you can resume manually with a continuation message). Closing/deleting the session clears its state.
-6. **Model persistence after the handoff**: the swap runs the kickoff on the `prewalk-executor` agent and switches the session to it; if you later cycle the TUI agent yourself, make sure it stays on `prewalk-executor`.
-7. **Suitable tasks**: contained scope, 8–12 todos, existing conventions to copy, a foundational and self-contained task #1. Don't use it for trivial fixes (pointless overhead) or sprawling tasks (those need sub-agents, not a single handoff).
 
 ## Versioning & updates
 
