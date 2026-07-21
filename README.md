@@ -32,15 +32,6 @@ curl -fsSL "$base/.opencode/agent/prewalk-executor.md"  -o .opencode/agent/prewa
 
 The `/prewalk` command (alias `/pw`) is registered automatically by the plugin at startup — no command file needed. Restart OpenCode after installing.
 
-### Pinning the phase models
-
-Each phase runs on its own OpenCode **agent**, whose system prompt **and pinned model** are baked into the agent file — this is the single source of truth for which model each phase uses:
-
-- `prewalk-frontier` (`.opencode/agent/prewalk-frontier.md`) — the `model:` field pins the planning model.
-- `prewalk-executor` (`.opencode/agent/prewalk-executor.md`) — the `model:` field pins the executor model.
-
-There is no longer a separate `frontier`/`executor` setting or a `--into` override; edit the `model:` line in the corresponding agent file to change a phase's model. The `/prewalk` command is wired to start on the `prewalk-frontier` agent, so planning always runs on the strong model even if the session is currently on the executor. What matters is only that the planning model is meaningfully stronger than the executor.
-
 Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this repo):
 
 ```json
