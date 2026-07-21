@@ -105,6 +105,15 @@ Prewalk only pays off when there is real work left to hand off. Two guardrails h
 5. **Model persistence after auto-swap**: the model override is passed on every prompt the plugin sends, but if you send a message yourself after the handoff, make sure the TUI is on the executor model.
 6. **Suitable tasks**: contained scope, 8–12 todos, existing conventions to copy, a foundational and self-contained task #1. Don't use it for trivial fixes (pointless overhead) or sprawling tasks (those need sub-agents, not a single handoff).
 
+## Versioning & updates
+
+The installed version is the `VERSION` constant at the top of `prewalk.ts`; releases are tagged with [semver](https://semver.org) in git (`v0.1.0`, `v0.2.0`, …). To check for updates, compare your local `VERSION` with the one in this repo. To update, re-download the file and restart OpenCode — this is also the exact instruction to hand to your agent:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/daniel-97/opencode-prewalk/main/plugin/prewalk.ts \
+  -o .opencode/plugin/prewalk.ts
+```
+
 ## Attribution
 
 Technique: Can Bölük / Stencil, ["You only need the frontier model for one single edit"](https://stencil.so/blog/prewalk) (2026-07-13). Skill structure: [westfable/hermes-prewalk](https://github.com/westfable/hermes-prewalk), MIT.
