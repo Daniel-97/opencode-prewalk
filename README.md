@@ -8,24 +8,25 @@ The idea in one line: an agent's cost is in the **reads**, not the edits. Instea
 
 ## Installation
 
-One file to copy. Per project:
+One file to copy. Clone this repo and copy from your local checkout — per project:
 
 ```sh
+git clone https://github.com/Daniel-97/opencode-prewalk.git
 mkdir -p .opencode/plugin
-cp plugin/prewalk.ts .opencode/plugin/prewalk.ts
+cp opencode-prewalk/.opencode/plugin/prewalk.ts .opencode/plugin/prewalk.ts
 ```
 
 Or globally (all projects):
 
 ```sh
 mkdir -p ~/.config/opencode/plugin
-cp plugin/prewalk.ts ~/.config/opencode/plugin/prewalk.ts
+cp opencode-prewalk/.opencode/plugin/prewalk.ts ~/.config/opencode/plugin/prewalk.ts
 ```
 
 Without a checkout, download it straight from the repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/CHANGE-ME/opencode-prewalk/main/plugin/prewalk.ts \
+curl -fsSL https://raw.githubusercontent.com/Daniel-97/opencode-prewalk/main/.opencode/plugin/prewalk.ts \
   -o .opencode/plugin/prewalk.ts
 ```
 
@@ -112,7 +113,7 @@ Prewalk only pays off when there is real work left to hand off. Two guardrails h
 The installed version is the `VERSION` constant at the top of `prewalk.ts`; releases are tagged with [semver](https://semver.org) in git (`v0.1.0`, `v0.2.0`, …). To check for updates, compare your local `VERSION` with the one in this repo. To update, re-download the file and restart OpenCode — this is also the exact instruction to hand to your agent:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/daniel-97/opencode-prewalk/main/plugin/prewalk.ts \
+curl -fsSL https://raw.githubusercontent.com/Daniel-97/opencode-prewalk/main/.opencode/plugin/prewalk.ts \
   -o .opencode/plugin/prewalk.ts
 ```
 
