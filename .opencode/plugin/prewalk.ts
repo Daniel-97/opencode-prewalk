@@ -41,6 +41,7 @@ interface PrewalkState {
   phase: Phase
   todoCreated: boolean
   firstEditLanded: boolean
+  edits: number
   pauseSeen: boolean
   maxTodos: number
   executor?: ModelRef // set => auto-swap mode
@@ -68,6 +69,9 @@ const frontierInstruction = (maxTodos: number) => `
 <prewalk phase="frontier">
 You are running the PREWALK protocol, phase 1 (frontier planner). Follow it exactly.
 
+0. TRIVIALITY CHECK first: if the task clearly fits in one or two small edits,
+   skip this protocol entirely — complete the task directly, verify it, and
+   stop. No todo list, no PAUSE item.
 1. EXPLORE the codebase deeply first: config files, entry points, every file
    relevant to the task; grep for existing patterns and conventions. Everything
    you read now is inherited by the rest of the run — read what matters, once.
@@ -226,6 +230,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
         phase: "frontier",
         todoCreated: false,
         firstEditLanded: false,
+        edits: 0,
         pauseSeen: false,
         maxTodos: defaults.maxTodos,
         executor,
@@ -301,6 +306,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
       const st = states.get(input?.sessionID)
       if (!st || st.phase !== "frontier") return
       if (!EDIT_TOOLS.has(input?.tool)) return
+      st.edits++
       if (st.todoCreated && !st.firstEditLanded) {
         st.firstEditLanded = true
         await log("info", "prewalk: first edit landed — swap armed", {
@@ -322,12 +328,43 @@ export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
       if (st.phase === "frontier") {
         const ready = (st.todoCreated && st.firstEditLanded) || st.pauseSeen
         if (!ready) {
-          if (!st.warnedNoProgress) {
+          if (st.edits > 0) {
+            // Triviality bail-out: the model completed the task directly
+            // (prompt rule 0) — nothing to hand off.
+            toast("prewalk: task completed directly in the frontier phase — no handoff needed", "success")
+            await log("info", "prewalk: triviality bail-out", { sessionID, edits: st.edits })
+            states.delete(sessionID)
+          } else if (!st.warnedNoProgress) {
             st.warnedNoProgress = true
             toast(
               "prewalk: frontier turn ended without todo+edit — task may not suit prewalk",
               "warning",
             )
+          }
+          return
+        }
+
+        // Handoff worth it? With 0–1 remaining todos the swap overhead
+        // exceeds any savings.
+        if (st.todosRemaining === 0) {
+          toast("prewalk: plan already completed in the frontier phase — no handoff needed", "success")
+          await log("info", "prewalk: nothing left to hand off", { sessionID })
+          states.delete(sessionID)
+          return
+        }
+        if (st.todosRemaining === 1) {
+          const wasAuto = !!st.executor
+          st.phase = "executor" // prunes the planning instruction; model stays as-is
+          st.executor = undefined
+          toast("prewalk: only 1 todo left — handoff skipped, finishing on the current model")
+          await log("info", "prewalk: handoff skipped (1 todo left)", { sessionID })
+          if (wasAuto) {
+            await client.session
+              .prompt({
+                path: { id: sessionID },
+                body: { parts: [{ type: "text", text: executorKickoff }] },
+              })
+              .catch(() => {})
           }
           return
         }
