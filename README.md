@@ -17,14 +17,14 @@ cp -r opencode-prewalk/.opencode/plugin opencode-prewalk/.opencode/agent .openco
 rm -rf opencode-prewalk
 ```
 
-Or download each file individually:
+Or download the archive and extract the two directories:
 
 ```sh
-mkdir -p .opencode/plugin .opencode/agent
-base=https://raw.githubusercontent.com/Daniel-97/opencode-prewalk/main
-curl -fsSL "$base/.opencode/plugin/prewalk.ts"         -o .opencode/plugin/prewalk.ts
-curl -fsSL "$base/.opencode/agent/prewalk-frontier.md"  -o .opencode/agent/prewalk-frontier.md
-curl -fsSL "$base/.opencode/agent/prewalk-executor.md"  -o .opencode/agent/prewalk-executor.md
+mkdir -p .opencode
+curl -fsSL https://github.com/Daniel-97/opencode-prewalk/archive/main.tar.gz \
+  | tar xz --strip=1 \
+    opencode-prewalk-main/.opencode/plugin \
+    opencode-prewalk-main/.opencode/agent
 ```
 
 The `/prewalk` command (alias `/pw`) is registered automatically at startup — restart OpenCode after installing.
@@ -64,14 +64,7 @@ Prewalk only pays off when there is real work left to hand off. Two guardrails h
 
 ## Versioning & updates
 
-The installed version is the `VERSION` constant at the top of `prewalk.ts`; releases are tagged with [semver](https://semver.org) in git (`v0.2.0`, …). To check for updates, compare your local `VERSION` with the one in this repo. To update, re-download all three files and restart OpenCode — this is also the exact instruction to hand to your agent:
-
-```sh
-base=https://raw.githubusercontent.com/Daniel-97/opencode-prewalk/main
-curl -fsSL "$base/.opencode/plugin/prewalk.ts"         -o .opencode/plugin/prewalk.ts
-curl -fsSL "$base/.opencode/agent/prewalk-frontier.md"  -o .opencode/agent/prewalk-frontier.md
-curl -fsSL "$base/.opencode/agent/prewalk-executor.md"  -o .opencode/agent/prewalk-executor.md
-```
+The installed version is the `VERSION` constant at the top of `prewalk.ts`; releases are tagged with [semver](https://semver.org) in git (`v0.2.0`, …). To check for updates, compare your local `VERSION` with the one in this repo. To update, re-run the [installation](#installation) commands above and restart OpenCode.
 
 ## Attribution
 
