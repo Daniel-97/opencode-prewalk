@@ -17,6 +17,16 @@ export function countRemaining<T extends { status?: string; content?: string }>(
   ).length
 }
 
+export function parseExecutorModel(
+  raw: string,
+): { providerID: string; modelID: string } | undefined {
+  const s = raw.trim()
+  if (!s) return undefined
+  const i = s.indexOf("/")
+  if (i < 0) return undefined
+  return { providerID: s.slice(0, i), modelID: s.slice(i + 1) }
+}
+
 export function isConfirmation(text: string, confirmations: string[]): boolean {
   const t = text.trim().toLowerCase()
   return confirmations.some((c) => c.trim().toLowerCase() === t)

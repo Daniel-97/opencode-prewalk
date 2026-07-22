@@ -8,26 +8,28 @@ The idea in one line: an agent's cost is in the **reads**, not the edits. Instea
 
 ## Installation
 
-Clone the repo anywhere, then copy the `plugin` and `agent` directories into your `.opencode/`:
+1. Clone the repo anywhere, then copy the `plugin` and `agent` directories into your `.opencode/`:
 
-```sh
-git clone --depth 1 https://github.com/Daniel-97/opencode-prewalk.git
-mkdir -p .opencode
-cp -r opencode-prewalk/.opencode/plugin opencode-prewalk/.opencode/agent .opencode/
-rm -rf opencode-prewalk
-```
+   ```sh
+   git clone --depth 1 https://github.com/Daniel-97/opencode-prewalk.git
+   mkdir -p .opencode
+   cp -r opencode-prewalk/.opencode/plugin opencode-prewalk/.opencode/agent .opencode/
+   rm -rf opencode-prewalk
+   ```
 
-Or download the archive and extract the two directories:
+   Or download the archive and extract the two directories:
 
-```sh
-mkdir -p .opencode
-curl -fsSL https://github.com/Daniel-97/opencode-prewalk/archive/main.tar.gz \
-  | tar xz --strip=1 \
-    opencode-prewalk-main/.opencode/plugin \
-    opencode-prewalk-main/.opencode/agent
-```
+   ```sh
+   mkdir -p .opencode
+   curl -fsSL https://github.com/Daniel-97/opencode-prewalk/archive/main.tar.gz \
+     | tar xz --strip=1 \
+       opencode-prewalk-main/.opencode/plugin \
+       opencode-prewalk-main/.opencode/agent
+   ```
 
-The `/prewalk` command (alias `/pw`) is registered automatically at startup — restart OpenCode after installing.
+2. **Pin a cheaper executor model** (required for the cost savings). Either set `model:` in `.opencode/agent/prewalk-executor.md`, or add `"executor": "openrouter/deepseek/deepseek-chat"` to `.opencode/prewalk.json`. Without one, prewalk still hands off but the executor runs on the frontier model — the ~50% cost saving does not apply.
+
+3. Restart OpenCode — the `/prewalk` command (alias `/pw`) is registered automatically at startup.
 
 Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this repo):
 
@@ -38,6 +40,7 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 }
 ```
 
+- `executor` — (optional) `"provider/model-id"` pin for the executor, with precedence over any pin in `prewalk-executor.md`. The split is on the FIRST `/`, so multi-segment IDs like `"openrouter/deepseek/deepseek-chat"` work. Without this OR a pin in `prewalk-executor.md` the handoff warns and runs on the session's model — no cost savings.
 - `maxTodos` — todo list cap (default 12) used for the "plan may be too large" warning when the frontier exceeds it. The cap is also stated inside the frontier agent's prompt; keep the two in sync if you change it. (The article documents that without a cap GPT-5.6 creates 60-item lists and batch-completes them.)
 - `confirmations` — (deprecated fallback) the set of bare user messages treated as "confirm the plan" at the ⏸️ checkpoint when the user does NOT run `/pw-go`. Prefer `/pw-go`. Defaults to a small set including the empty string (a blank message confirms). Anything not matching stays on the frontier.
 

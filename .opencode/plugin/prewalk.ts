@@ -38,6 +38,7 @@ import {
   isPauseTodo,
   countRemaining,
   isConfirmation,
+  parseExecutorModel,
 } from "./prewalk-helpers"
 import fs from "node:fs"
 import path from "node:path"
@@ -68,6 +69,7 @@ interface PrewalkState {
 interface PrewalkDefaults {
   maxTodos: number
   confirmations: string[]
+  executor?: { providerID: string; modelID: string }
 }
 
 const VERSION = "0.2.0"
@@ -106,6 +108,10 @@ function loadDefaults(directory: string): PrewalkDefaults {
       if (Array.isArray(o.confirmations)) {
         const cs = o.confirmations.filter((c): c is string => typeof c === "string")
         if (cs.length > 0) out.confirmations = cs
+      }
+      if (typeof o.executor === "string") {
+        const parsed = parseExecutorModel(o.executor)
+        if (parsed) out.executor = parsed
       }
     }
   } catch {
@@ -168,6 +174,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
 
   /** Resolve the model pinned on an agent definition, if any. */
   const resolveAgentModel = async (agentName: string) => {
+    if (agentName === AGENT_EXECUTOR && defaults.executor) return defaults.executor
     try {
       const res = await client.app.agents({ query: { directory: dir } })
       const agents: Agent[] = res.data ?? []

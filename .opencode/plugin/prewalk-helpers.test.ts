@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { isPauseTodo, countRemaining, isConfirmation } from "./prewalk-helpers"
+import { isPauseTodo, countRemaining, isConfirmation, parseExecutorModel } from "./prewalk-helpers"
 
 test("isPauseTodo matches current behavior (red before P6/P7 hardening)", () => {
   assert.equal(isPauseTodo({ content: "⏸️ PAUSE — handoff" }), true)
@@ -41,4 +41,18 @@ test("countRemaining reaches zero when all are completed or cancelled", () => {
 test("isConfirmation is case- and whitespace-insensitive", () => {
   assert.equal(isConfirmation("  Continue ", ["continue", "ok"]), true)
   assert.equal(isConfirmation("no", ["continue", "ok"]), false)
+})
+
+test("parseExecutorModel splits on the FIRST slash (multi-segment model IDs)", () => {
+  assert.deepEqual(parseExecutorModel("openrouter/deepseek/deepseek-chat"), {
+    providerID: "openrouter",
+    modelID: "deepseek/deepseek-chat",
+  })
+  assert.deepEqual(parseExecutorModel("anthropic/claude-opus-4-8"), {
+    providerID: "anthropic",
+    modelID: "claude-opus-4-8",
+  })
+  assert.equal(parseExecutorModel(""), undefined)
+  assert.equal(parseExecutorModel("   "), undefined)
+  assert.deepEqual(parseExecutorModel("noprovider/"), { providerID: "noprovider", modelID: "" })
 })
