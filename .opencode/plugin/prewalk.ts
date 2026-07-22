@@ -179,74 +179,56 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
   /** Persistently switch this session's selected agent+model, then kick off. */
   const swapToExecutor = async (sessionID: string, st: PrewalkState) => {
     const executorModel = await resolveAgentModel(AGENT_EXECUTOR)
-    // Diagnostic: log the exact values we are about to send to switchAgent /
-    // switchModel so a fallback-to-default cannot hide behind assumptions.
     await log("info", "prewalk: swap → sending", {
       sessionID,
       agent: AGENT_EXECUTOR,
       model: executorModel ? modelLabel(executorModel) : null,
     })
 
-    // 1) Persistent switch of the session's agent (v2 endpoint). The kickoff
-    //    prompt's per-turn `agent` override alone is NOT enough — it does not
-    //    change the session's selected agent, so every turn after the kickoff
-    //    would revert to the session's default agent.
+    // 1) Persistent V2 agent/model switch — best-effort. It updates the UI
+    //    "agent switched" marker and the session's V2 state, but is NOT the
+    //    source of truth for the executor turn: the kickoff below carries an
+    //    explicit per-turn `agent`+`model` override (the only thing V1
+    //    createUserMessage actually consults). So failures here are warnings.
     try {
       await v2client.v2.session.switchAgent({ sessionID, agent: AGENT_EXECUTOR })
+      if (executorModel) {
+        try {
+          await v2client.v2.session.switchModel({
+            sessionID,
+            model: { id: executorModel.modelID, providerID: executorModel.providerID },
+          })
+        } catch (e: unknown) {
+          await log("warn", "prewalk: switchModel failed (continuing)", {
+            sessionID,
+            model: modelLabel(executorModel),
+            error: `${e}`,
+          })
+        }
+      }
     } catch (e: unknown) {
-      st.phase = "paused"
-      toast(
-        `prewalk: switchAgent fallito — agent "${AGENT_EXECUTOR}" non risolvibile. ` +
-          `Verifica .opencode/agent/prewalk-executor.md e \`opencode agent list\`.`,
-        "warning",
-      )
-      await log("warn", "prewalk: switchAgent failed", {
+      await log("warn", "prewalk: switchAgent failed (kicking off with per-turn override)", {
         sessionID,
         agent: AGENT_EXECUTOR,
         error: `${e}`,
       })
-      return
-    }
-
-    // 2) If the executor agent pins a model, switch it persistently too (same
-    //    reason: only the kickoff turn would otherwise use it).
-    if (executorModel) {
-      try {
-        await v2client.v2.session.switchModel({
-          sessionID,
-          model: { id: executorModel.modelID, providerID: executorModel.providerID },
-        })
-      } catch (e: unknown) {
-        await log("warn", "prewalk: switchModel failed (continuing)", {
-          sessionID,
-          model: modelLabel(executorModel),
-          error: `${e}`,
-        })
-      }
     }
 
     st.phase = "executor"
-    st.awaitingSwapVerification = true
-    st.verifiedMessageID = undefined
-    // Explicit swap toast, emitted right at the handoff: don't rely on the
-    // native UI to surface the agent/model change before the next render.
-    toast(
-      `→ passato a ${AGENT_EXECUTOR}${executorModel ? ` (modello ${modelLabel(executorModel)})` : ""}`,
-      "success",
-    )
-    await log("info", "prewalk: handoff to executor", {
-      sessionID,
-      executor: modelLabel(executorModel),
-    })
 
-    // 3) Kickoff. No per-turn `agent`/`model` override is passed: the
-    //    persistent switch above is now the source of truth, and leaving the
-    //    override out lets the post-swap verification prove it actually took
-    //    (the kickoff user message's `agent` must be prewalk-executor).
+    // 2) Kickoff with explicit per-turn agent+model — this is the override
+    //    createUserMessage actually honors. `model` shape is { providerID, modelID }
+    //    (V1), NOT the V2 { id, providerID } used by switchModel above.
     await client.session
       .prompt({
         path: { id: sessionID },
-        body: { parts: [{ type: "text", text: executorKickoff }] },
+        body: {
+          agent: AGENT_EXECUTOR,
+          ...(executorModel
+            ? { model: { providerID: executorModel.providerID, modelID: executorModel.modelID } }
+            : {}),
+          parts: [{ type: "text", text: executorKickoff }],
+        },
       })
       .catch(async (e: unknown) => {
         toast("prewalk: handoff failed — continue manually on the executor agent", "warning")
