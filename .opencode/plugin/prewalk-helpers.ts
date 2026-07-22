@@ -1,7 +1,5 @@
 export const AGENT_FRONTIER = "prewalk-frontier"
 export const AGENT_EXECUTOR = "prewalk-executor"
-export const PAUSE_MARKER = "⏸️"
-
 export function isPauseTodo(t: { content?: string } | null | undefined): boolean {
   const c = (t?.content ?? "").replace(/\uFE0F/g, "").trimStart()
   // \u23F8 = "⏸"; the variation selector U+FE0F is stripped above either way.

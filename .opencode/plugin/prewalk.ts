@@ -59,6 +59,7 @@ interface PrewalkState {
   lastHandledUserMessageID?: string
   readyToSwap?: boolean      // P4: auto-swap deferred to session.idle
   frontierTodosEverSeen?: boolean // P11: detect trivial path
+  anomalyWarned?: boolean     // P4 defense: one-shot toast guard
   pendingFrontierContinue?: boolean // P5: single-todo continuation pending
 }
 
@@ -491,7 +492,8 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           }
 
           // P4 defense: the frontier produced a todo list but never the ⏸️ checkpoint.
-          if (st.phase === "frontier" && st.frontierTodosEverSeen && !st.pauseSeen) {
+          if (st.phase === "frontier" && st.frontierTodosEverSeen && !st.pauseSeen && !st.anomalyWarned) {
+            st.anomalyWarned = true
             toast("prewalk: checkpoint todo not detected — check the todo list format", "warning")
             await log("warn", "prewalk: frontier finished with todos but no ⏸️ checkpoint", { sessionID })
           }

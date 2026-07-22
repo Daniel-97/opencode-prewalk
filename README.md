@@ -42,7 +42,7 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 
 - `executor` — (optional) `"provider/model-id"` pin for the executor, with precedence over any pin in `prewalk-executor.md`. The split is on the FIRST `/`, so multi-segment IDs like `"openrouter/deepseek/deepseek-chat"` work. Without this OR a pin in `prewalk-executor.md` the handoff warns and runs on the session's model — no cost savings.
 - `maxTodos` — threshold (default 12) for the "plan may be too large" warning when the frontier exceeds it. It governs only the warning — the actual list cap lives in the frontier agent's prompt. They are kept aligned by convention; changing one does not change the other.
-- `confirmations` — (deprecated fallback) the set of bare user messages treated as "confirm the plan" at the ⏸️ checkpoint when the user does NOT run `/pw-go`. Prefer `/pw-go`. Defaults to a small set including the empty string (a blank message confirms). Anything not matching stays on the frontier.
+- `confirmations` — (deprecated fallback) the set of bare user messages treated as "confirm the plan" at the ⏸️ checkpoint when the user does NOT run `/pw-go`. Prefer `/pw-go`. Defaults to a small set not including the empty string (a blank message does NOT confirm — add `""` to the array if you need that). Anything not matching stays on the frontier.
 
 ## Usage
 
