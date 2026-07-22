@@ -21,7 +21,7 @@ export function parseExecutorModel(
   const s = raw.trim()
   if (!s) return undefined
   const i = s.indexOf("/")
-  if (i < 0) return undefined
+  if (i <= 0 || i === s.length - 1) return undefined
   return { providerID: s.slice(0, i), modelID: s.slice(i + 1) }
 }
 
