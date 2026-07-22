@@ -41,7 +41,7 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 ```
 
 - `executor` — (optional) `"provider/model-id"` pin for the executor, with precedence over any pin in `prewalk-executor.md`. The split is on the FIRST `/`, so multi-segment IDs like `"openrouter/deepseek/deepseek-chat"` work. Without this OR a pin in `prewalk-executor.md` the handoff warns and runs on the session's model — no cost savings.
-- `maxTodos` — todo list cap (default 12) used for the "plan may be too large" warning when the frontier exceeds it. The cap is also stated inside the frontier agent's prompt; keep the two in sync if you change it. (The article documents that without a cap GPT-5.6 creates 60-item lists and batch-completes them.)
+- `maxTodos` — threshold (default 12) for the "plan may be too large" warning when the frontier exceeds it. It governs only the warning — the actual list cap lives in the frontier agent's prompt. They are kept aligned by convention; changing one does not change the other.
 - `confirmations` — (deprecated fallback) the set of bare user messages treated as "confirm the plan" at the ⏸️ checkpoint when the user does NOT run `/pw-go`. Prefer `/pw-go`. Defaults to a small set including the empty string (a blank message confirms). Anything not matching stays on the frontier.
 
 ## Usage
@@ -58,6 +58,11 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 
 The todo cap and the confirmation set are configured in `prewalk.json` (`maxTodos`, `confirmations`), not via flags. The executor model is pinned in `prewalk-executor.md`, not selected by a flag.
 
+## Differences from the article
+
+- **Checkpoint at end of turn, not mid-edit.** The article swaps at the first edit, mid-frontier-turn. OpenCode's V1 API does not expose a reliable mid-turn interrupt, so prewalk swaps at the ⏸️ checkpoint, after the frontier's summary turn completes (deferred to `session.idle`).
+- **Explicit agent handoff, not seamless continuation.** The article prefills subsequent turns so the cheap model never notices a handoff. prewalk swaps the agent explicitly via `/pw-go` (or auto-swap in `--no-pause`) and an explicit kickoff message; the executor prompt avoids protocol meta-language to match the seamless-continuation idea as closely as the API allows.
+
 ## Small-task guardrails
 
 Prewalk only pays off when there is real work left to hand off. Two guardrails handle tasks below that threshold:
@@ -67,7 +72,13 @@ Prewalk only pays off when there is real work left to hand off. Two guardrails h
 
 ## Versioning & updates
 
-The installed version is the `VERSION` constant at the top of `prewalk.ts`; releases are tagged with [semver](https://semver.org) in git (`v0.2.0`, …). To check for updates, compare your local `VERSION` with the one in this repo. To update, re-run the [installation](#installation) commands above and restart OpenCode.
+The installed version is the `VERSION` constant at the top of `prewalk.ts`. To check for updates, compare your local `VERSION` with the one in this repo. To update, re-run the [installation](#installation) commands above and restart OpenCode.
+
+## Limitations
+
+- **In-memory state:** prewalk's phase machine lives in the plugin process. A restart of OpenCode mid-prewalk loses it; resume manually by sending a continuation message (`/pw-go` or any prompt to the executor). The todo list and conversation context survive in the session.
+- **Checkpoint format:** the handoff gates on a todo whose content starts with `⏸️ PAUSE`, `PAUSE`, or `[PAUSE]` (uppercase). If the frontier emits it differently the protocol silently does not engage — the plugin warns on `session.idle` when a todo list exists without a detected checkpoint.
+- **Model pin required for savings:** without a pinned executor model (agent file or `prewalk.json` `executor` key) the handoff changes agent but not model — the cost savings do not apply.
 
 ## Attribution
 
