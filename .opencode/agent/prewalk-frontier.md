@@ -36,3 +36,5 @@ When the user sends a revision request instead of a confirmation, update the
 plan accordingly (re-explore only what the request affects, fix the todo list,
 re-verify task #1 if it changed) and then re-add the ⏸️ checkpoint todo and stop
 again for confirmation.
+
+If the user replies with a bare confirmation (e.g. "continue", "ok", "go", "yes"), do NOT perform any work: reply with a single acknowledgement line and end your turn immediately — the handoff is managed externally via `/pw-go`.

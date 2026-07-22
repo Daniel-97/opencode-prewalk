@@ -39,7 +39,7 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 ```
 
 - `maxTodos` — todo list cap (default 12) used for the "plan may be too large" warning when the frontier exceeds it. The cap is also stated inside the frontier agent's prompt; keep the two in sync if you change it. (The article documents that without a cap GPT-5.6 creates 60-item lists and batch-completes them.)
-- `confirmations` — the exact set of user messages (case-insensitive, trimmed) treated as "confirm the plan and hand off" at the ⏸️ checkpoint. The empty string means a blank message confirms. Anything not in this set is treated as a revision request and stays on the frontier agent.
+- `confirmations` — (deprecated fallback) the set of bare user messages treated as "confirm the plan" at the ⏸️ checkpoint when the user does NOT run `/pw-go`. Prefer `/pw-go`. Defaults to a small set including the empty string (a blank message confirms). Anything not matching stays on the frontier.
 
 ## Usage
 
@@ -50,7 +50,7 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 
 | Flag | Effect |
 |---|---|
-| *(none)* | **Manual mode (Hermes-style)**: at the ⏸️ checkpoint you get a toast; review the plan and task #1, then send a confirmation (`continue`, `ok`, …) to hand off to the executor agent, or a revision request to stay on the frontier agent |
+| *(none)* | **Manual mode (command-driven)**: at the ⏸️ checkpoint you get a toast; review the plan and task #1, then run `/pw-go` to hand off to the executor, or `/pw-revise <changes>` to update the plan on the frontier (typing a free-form "continue" still works as a deprecated fallback) |
 | `--no-pause` | **Auto-swap**: when the ⏸️ checkpoint todo is added, the plugin hands off to the `prewalk-executor` agent immediately (no waiting for confirmation) |
 
 The todo cap and the confirmation set are configured in `prewalk.json` (`maxTodos`, `confirmations`), not via flags. The executor model is pinned in `prewalk-executor.md`, not selected by a flag.

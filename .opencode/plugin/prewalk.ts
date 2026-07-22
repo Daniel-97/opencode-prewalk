@@ -62,6 +62,7 @@ interface PrewalkState {
   // undetected until the user inspects an export.
   awaitingSwapVerification?: boolean
   verifiedMessageID?: string
+  readyToSwap?: boolean
 }
 
 interface PrewalkDefaults {
@@ -255,15 +256,29 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
     // -----------------------------------------------------------------------
     config: async (config: Config) => {
       config.command = config.command ?? {}
-      const definition = {
+      const frontierCmd = {
         description:
           "Prewalk — frontier explores, plans, lands the first edit; then hands off to the executor",
         template: "$ARGUMENTS",
         agent: AGENT_FRONTIER,
       }
-      // Don't clobber commands the user defined with the same names.
-      config.command.prewalk = config.command.prewalk ?? definition
-      config.command.pw = config.command.pw ?? definition
+      const goCmd = {
+        description: "Prewalk — confirm the plan and hand off to the executor now",
+        template: executorKickoff,
+        agent: AGENT_EXECUTOR,
+      }
+      const reviseCmd = {
+        description: "Prewalk — revise the plan on the frontier agent",
+        template: "$ARGUMENTS",
+        agent: AGENT_FRONTIER,
+      }
+      // Use distinct objects (App.A): a mutation of one must not leak into another.
+      config.command.prewalk = config.command.prewalk ?? structuredClone(frontierCmd)
+      config.command.pw = config.command.pw ?? structuredClone(frontierCmd)
+      config.command["pw-go"] = config.command["pw-go"] ?? structuredClone(goCmd)
+      config.command.pwg = config.command.pwg ?? structuredClone(goCmd)
+      config.command["pw-revise"] = config.command["pw-revise"] ?? structuredClone(reviseCmd)
+      config.command.pwr = config.command.pwr ?? structuredClone(reviseCmd)
     },
 
     // -----------------------------------------------------------------------
@@ -271,30 +286,63 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
     //    and strip the flag from the message the model will see.
     // -----------------------------------------------------------------------
     "command.execute.before": async (input, output) => {
-      if (input.command !== "prewalk" && input.command !== "pw") return
+      const isPrewalk = input.command === "prewalk" || input.command === "pw"
+      const isGo = input.command === "pw-go" || input.command === "pwg"
+      const isRevise = input.command === "pw-revise" || input.command === "pwr"
+      if (!isPrewalk && !isGo && !isRevise) return
       const sessionID = input.sessionID
       if (!sessionID) return
 
-      const args = input.arguments ?? ""
-      const autoSwap = /--no-pause\b/.test(args)
+      if (isPrewalk) {
+        const args = input.arguments ?? ""
+        const autoSwap = /--no-pause\b/.test(args)
+        states.set(sessionID, initialState(defaults, autoSwap))
+        const cleanTask = args
+          .replace(/--no-pause\b/g, "")
+          .replace(/\s+/g, " ")
+          .trim() || "Proceed with the task."
+        const textPart = output.parts.find((p): p is TextPart => p.type === "text")
+        if (textPart) textPart.text = cleanTask
+        else output.parts = [{ id: "", sessionID: "", messageID: "", type: "text", text: cleanTask } as TextPart]
+        await log("info", "prewalk: frontier phase started", { sessionID, auto: autoSwap })
+        toast(
+          autoSwap
+            ? "prewalk started — auto-swap at the checkpoint"
+            : "prewalk started — manual checkpoint at the ⏸️ todo",
+        )
+        return
+      }
 
-      states.set(sessionID, initialState(defaults, autoSwap))
+      const st = states.get(sessionID)
+      if (!st) return
 
-      const cleanTask = args
-        .replace(/--no-pause\b/g, "")
-        .replace(/\s+/g, " ")
-        .trim() || "Proceed with the task."
+      if (isGo) {
+        // The command template is the kickoff text and the command's own `agent`
+        // is AGENT_EXECUTOR. We just advance the state machine; the model pin is
+        // resolved here and used as a per-turn override via the command's `model`
+        // once OpenCode surfaces such a field — until then rely on the agent pin
+        // (Task 4 emits a warning when there is no pin and no `prewalk.json`
+        // `executor` override).
+        const executorModel = await resolveAgentModel(AGENT_EXECUTOR)
+        if (!executorModel) {
+          toast(
+            `prewalk: ${AGENT_EXECUTOR} has no pinned model — the handoff will NOT change model or cost. ` +
+              `Pin a cheaper model in .opencode/agent/prewalk-executor.md or set "executor" in prewalk.json`,
+            "warning",
+          )
+          await log("warn", "prewalk: executor has no pinned model", { sessionID })
+        }
+        st.phase = "executor"
+        await log("info", "prewalk: /pw-go handoff", { sessionID })
+        return
+      }
 
-      const textPart = output.parts.find((p): p is TextPart => p.type === "text")
-      if (textPart) textPart.text = cleanTask
-      else output.parts = [{ id: "", sessionID: "", messageID: "", type: "text", text: cleanTask } as TextPart]
-
-      await log("info", "prewalk: frontier phase started", { sessionID, auto: autoSwap })
-      toast(
-        autoSwap
-          ? "prewalk started — auto-swap at the checkpoint"
-          : "prewalk started — manual checkpoint at the ⏸️ todo",
-      )
+      // isRevise: stay paused, the command routes the revision text to the
+      // frontier agent (command.agent === AGENT_FRONTIER). The frontier's own
+      // prompt already tells it to re-add the ⏸️ checkpoint after revising.
+      if (st.phase !== "paused") return
+      await log("info", "prewalk: /pw-revise revision received — staying on frontier", { sessionID })
+      toast("prewalk: plan revised on the frontier — review and /pw-go when ready", "info")
     },
 
     // -----------------------------------------------------------------------
@@ -370,17 +418,17 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           }
 
           if (st.autoSwap) {
-            await swapToExecutor(sessionID, st)
+            // Defer to session.idle (Task 5 / P4) — do NOT swap mid-frontier-turn.
+            st.readyToSwap = true
           } else if (st.phase === "frontier") {
             st.phase = "paused"
             toast(
-              "prewalk ⏸️ PAUSE — review the plan and task #1, then send a confirmation (e.g. 'continue') to hand off, or a revision request",
+              "prewalk ⏸️ PAUSE — review the plan and task #1, then run `/pw-go` to hand off, or `/pw-revise <changes>` to revise",
               "success",
             )
             await log("info", "prewalk: paused at checkpoint", { sessionID })
           } else {
-            // paused (revision loop): re-confirm the checkpoint quietly.
-            toast("prewalk: plan updated — review and confirm to hand off, or send another revision request", "info")
+            toast("prewalk: plan updated — review and `/pw-go` to hand off, or `/pw-revise <changes>` again", "info")
             await log("info", "prewalk: re-paused after revision", { sessionID })
           }
           return
@@ -433,13 +481,19 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
 
           const text = await fetchMessageText(info.sessionID, info.id).catch(() => "")
           if (isConfirmation(text, st.confirmations)) {
-            await swapToExecutor(info.sessionID, st)
-          } else {
-            // Revision request: do NOT swap. The message is delivered to the
-            // session's current agent (still prewalk-frontier); stay paused.
-            await log("info", "prewalk: revision request received — staying on frontier", {
+            toast(
+              "prewalk: free-form confirmation is deprecated — use `/pw-go` to hand off reliably. Attempting handoff now…",
+              "warning",
+            )
+            await log("info", "prewalk: legacy confirmation — falling back to swapToExecutor", {
               sessionID: info.sessionID,
             })
+            await swapToExecutor(info.sessionID, st)
+          } else {
+            await log("info", "prewalk: revision request received — staying on frontier; prefer /pw-revise", {
+              sessionID: info.sessionID,
+            })
+            toast("prewalk: prefer `/pw-revise <changes>` to revise reliably — legacy revision kept on frontier", "info")
           }
           return
         }
