@@ -317,8 +317,10 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
       }
 
       const st = states.get(sessionID)
-      if (!st) return
-
+      if (!st) {
+        toast("prewalk: no active run for this session — start with /prewalk (or /pw) first", "warning")
+        return
+      }
       if (isGo) {
         // The command template is the kickoff text and the command's own `agent`
         // is AGENT_EXECUTOR. We just advance the state machine; the model pin is
