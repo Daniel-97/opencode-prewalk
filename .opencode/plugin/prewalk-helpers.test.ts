@@ -43,6 +43,11 @@ test("isConfirmation is case- and whitespace-insensitive", () => {
   assert.equal(isConfirmation("no", ["continue", "ok"]), false)
 })
 
+test("isConfirmation rejects empty string when not in list (App.A guard)", () => {
+  assert.equal(isConfirmation("", ["continue", "ok"]), false)
+  assert.equal(isConfirmation(" ", ["continue", "ok"]), false)
+})
+
 test("parseExecutorModel splits on the FIRST slash (multi-segment model IDs)", () => {
   assert.deepEqual(parseExecutorModel("openrouter/deepseek/deepseek-chat"), {
     providerID: "openrouter",

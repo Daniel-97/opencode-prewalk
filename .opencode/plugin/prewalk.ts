@@ -71,7 +71,6 @@ interface PrewalkDefaults {
 const VERSION = "0.2.0"
 
 const DEFAULT_CONFIRMATIONS = [
-  "",
   "continue",
   "ok",
   "go",

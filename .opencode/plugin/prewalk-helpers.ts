@@ -8,7 +8,7 @@ export function isPauseTodo(t: { content?: string } | null | undefined): boolean
   if (c.startsWith("\u23F8")) return true
   // Case-SENSITIVE textual fallback to avoid false positives on the word "Pause"
   // mid-sentence. Accept "[PAUSE]", "PAUSE ...", "[PAUSE] ..." — not "Pause ...".
-  return /^(\[?PAUSE\b|\[PAUSE\])/m.test(c)
+  return /^\[?PAUSE\b/m.test(c)
 }
 
 export function countRemaining<T extends { status?: string; content?: string }>(todos: T[]): number {
