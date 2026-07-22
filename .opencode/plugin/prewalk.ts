@@ -173,8 +173,10 @@ export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
   const swapToExecutor = async (sessionID: string, st: PrewalkState) => {
     st.phase = "executor"
     const executorModel = await resolveAgentModel(AGENT_EXECUTOR)
+    // Explicit swap toast, emitted right at the handoff call: don't rely on
+    // the native UI to surface the agent/model change before the next render.
     toast(
-      `prewalk: handoff → ${AGENT_EXECUTOR}${executorModel ? ` (${modelLabel(executorModel)})` : ""}`,
+      `→ passato a ${AGENT_EXECUTOR}${executorModel ? ` (modello ${modelLabel(executorModel)})` : ""}`,
       "success",
     )
     await log("info", "prewalk: handoff to executor", {
