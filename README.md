@@ -8,26 +8,28 @@ The idea in one line: an agent's cost is in the **reads**, not the edits. Instea
 
 ## Installation
 
-Clone the repo anywhere, then copy the `plugin` and `agent` directories into your `.opencode/`:
+1. Clone the repo anywhere, then copy the `plugin` and `agent` directories into your `.opencode/`:
 
-```sh
-git clone --depth 1 https://github.com/Daniel-97/opencode-prewalk.git
-mkdir -p .opencode
-cp -r opencode-prewalk/.opencode/plugin opencode-prewalk/.opencode/agent .opencode/
-rm -rf opencode-prewalk
-```
+   ```sh
+   git clone --depth 1 https://github.com/Daniel-97/opencode-prewalk.git
+   mkdir -p .opencode
+   cp -r opencode-prewalk/.opencode/plugin opencode-prewalk/.opencode/agent .opencode/
+   rm -rf opencode-prewalk
+   ```
 
-Or download the archive and extract the two directories:
+   Or download the archive and extract the two directories:
 
-```sh
-mkdir -p .opencode
-curl -fsSL https://github.com/Daniel-97/opencode-prewalk/archive/main.tar.gz \
-  | tar xz --strip=1 \
-    opencode-prewalk-main/.opencode/plugin \
-    opencode-prewalk-main/.opencode/agent
-```
+   ```sh
+   mkdir -p .opencode
+   curl -fsSL https://github.com/Daniel-97/opencode-prewalk/archive/main.tar.gz \
+     | tar xz --strip=1 \
+       opencode-prewalk-main/.opencode/plugin \
+       opencode-prewalk-main/.opencode/agent
+   ```
 
-The `/prewalk` command (alias `/pw`) is registered automatically at startup — restart OpenCode after installing.
+2. **Pin a cheaper executor model** (required for the cost savings). For `/pw-go`, pin `model:` in `.opencode/agent/prewalk-executor.md` so the executor actually runs on the cheaper model. The optional `.opencode/prewalk.json` `"executor"` override is used only when the plugin performs the handoff itself (auto-swap / legacy free-form confirmations). Without a pin, the handoff may change agent but not model — the ~50% cost saving does not apply.
+
+3. Restart OpenCode — the `/prewalk` command (alias `/pw`) is registered automatically at startup.
 
 Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this repo):
 
@@ -38,8 +40,9 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 }
 ```
 
-- `maxTodos` — todo list cap (default 12) used for the "plan may be too large" warning when the frontier exceeds it. The cap is also stated inside the frontier agent's prompt; keep the two in sync if you change it. (The article documents that without a cap GPT-5.6 creates 60-item lists and batch-completes them.)
-- `confirmations` — the exact set of user messages (case-insensitive, trimmed) treated as "confirm the plan and hand off" at the ⏸️ checkpoint. The empty string means a blank message confirms. Anything not in this set is treated as a revision request and stays on the frontier agent.
+- `executor` — (optional) `"provider/model-id"` pin for the executor, with precedence over any pin in `prewalk-executor.md`. The split is on the FIRST `/`, so multi-segment IDs like `"openrouter/deepseek/deepseek-chat"` work. Without this OR a pin in `prewalk-executor.md` the handoff warns and runs on the session's model — no cost savings.
+- `maxTodos` — threshold (default 12) for the "plan may be too large" warning when the frontier exceeds it. It governs only the warning — the actual list cap lives in the frontier agent's prompt. They are kept aligned by convention; changing one does not change the other.
+- `confirmations` — (deprecated fallback) the set of bare user messages treated as "confirm the plan" at the ⏸️ checkpoint when the user does NOT run `/pw-go`. Prefer `/pw-go`. Defaults to a small set not including the empty string (a blank message does NOT confirm — add `""` to the array if you need that). Anything not matching stays on the frontier.
 
 ## Usage
 
@@ -50,10 +53,15 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 
 | Flag | Effect |
 |---|---|
-| *(none)* | **Manual mode (Hermes-style)**: at the ⏸️ checkpoint you get a toast; review the plan and task #1, then send a confirmation (`continue`, `ok`, …) to hand off to the executor agent, or a revision request to stay on the frontier agent |
+| *(none)* | **Manual mode (command-driven)**: at the ⏸️ checkpoint you get a toast; review the plan and task #1, then run `/pw-go` to hand off to the executor, or `/pw-revise <changes>` to update the plan on the frontier (typing a free-form "continue" still works as a deprecated fallback) |
 | `--no-pause` | **Auto-swap**: when the ⏸️ checkpoint todo is added, the plugin hands off to the `prewalk-executor` agent immediately (no waiting for confirmation) |
 
 The todo cap and the confirmation set are configured in `prewalk.json` (`maxTodos`, `confirmations`), not via flags. The executor model is pinned in `prewalk-executor.md`, not selected by a flag.
+
+## Differences from the article
+
+- **Checkpoint at end of turn, not mid-edit.** The article swaps at the first edit, mid-frontier-turn. OpenCode's V1 API does not expose a reliable mid-turn interrupt, so prewalk swaps at the ⏸️ checkpoint, after the frontier's summary turn completes (deferred to `session.idle`).
+- **Explicit agent handoff, not seamless continuation.** The article prefills subsequent turns so the cheap model never notices a handoff. prewalk swaps the agent explicitly via `/pw-go` (or auto-swap in `--no-pause`) and an explicit kickoff message; the executor prompt avoids protocol meta-language to match the seamless-continuation idea as closely as the API allows.
 
 ## Small-task guardrails
 
@@ -64,7 +72,13 @@ Prewalk only pays off when there is real work left to hand off. Two guardrails h
 
 ## Versioning & updates
 
-The installed version is the `VERSION` constant at the top of `prewalk.ts`; releases are tagged with [semver](https://semver.org) in git (`v0.2.0`, …). To check for updates, compare your local `VERSION` with the one in this repo. To update, re-run the [installation](#installation) commands above and restart OpenCode.
+The installed version is the `VERSION` constant at the top of `prewalk.ts`. To check for updates, compare your local `VERSION` with the one in this repo. To update, re-run the [installation](#installation) commands above and restart OpenCode.
+
+## Limitations
+
+- **In-memory state:** prewalk's phase machine lives in the plugin process. A restart of OpenCode mid-prewalk loses it; resume manually by sending a continuation message (`/pw-go` or any prompt to the executor). The todo list and conversation context survive in the session.
+- **Checkpoint format:** the handoff gates on a todo whose content starts with `⏸️ PAUSE`, `PAUSE`, or `[PAUSE]` (uppercase). If the frontier emits it differently the protocol silently does not engage — the plugin warns on `session.idle` when a todo list exists without a detected checkpoint.
+- **Model pin required for savings:** without a pinned executor model (agent file or `prewalk.json` `executor` key) the handoff changes agent but not model — the cost savings do not apply.
 
 ## Attribution
 
