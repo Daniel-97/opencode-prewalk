@@ -322,6 +322,13 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
         return
       }
       if (isGo) {
+        if (st.phase !== "paused") {
+          toast(
+            "prewalk: /pw-go is only valid at the ⏸️ checkpoint — run /prewalk and wait for the PAUSE todo",
+            "warning",
+          )
+          return
+        }
         // The command template is the kickoff text and the command's own `agent`
         // is AGENT_EXECUTOR. We just advance the state machine; the model pin is
         // resolved here and used as a per-turn override via the command's `model`
