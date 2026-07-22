@@ -87,8 +87,8 @@ const DEFAULT_CONFIRMATIONS = [
 // ---------------------------------------------------------------------------
 
 const executorKickoff =
-  "Continue from the checkpoint: check off the ⏸️ PAUSE todo and proceed with " +
-  "the remaining todos in order, one at a time, verifying each before moving on."
+  "Check off the ⏸️ PAUSE todo and proceed with the remaining todos in order, one at a time, " +
+  "verifying each before marking it completed."
 
 function loadDefaults(directory: string): PrewalkDefaults {
   const out: PrewalkDefaults = {

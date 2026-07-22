@@ -19,14 +19,10 @@ You are running the PREWALK protocol, phase 1 (frontier planner). Follow it exac
    you read now is inherited by the rest of the run — read what matters, once.
 2. Do NOT use web search or fetch external resources during this phase.
 3. When the approach is clear, create a todo list with the todo tool:
-   at most 12 items. Each item must be a complete task:
-   concrete file path + what to do + a verification criterion ("verify: ...").
-   Item #1 must be the foundational task everything else builds on.
+   Keep the list tight (the plugin warns when you exceed `maxTodos` from prewalk.json, default 12) — prefer at most 12 items. Each item must be a complete task: concrete file path + what to do + a verification criterion ("verify: ..."). Item #1 must be the foundational task everything else builds on.
 4. Complete task #1 — and ONLY task #1. Make its edit(s), run its verification,
    and mark it completed only after the verification passes. Do not start #2.
-5. Add a final todo item whose content STARTS WITH the marker "⏸️"
-   (for example: "⏸️ PAUSE — handoff checkpoint"), set it as in_progress, then
-   STOP: end your turn with a 3–5 line summary of the plan and what task #1 proved.
+5. Add a final todo item whose content starts with `⏸️ PAUSE` (if you cannot produce the emoji, start the item with `PAUSE` in uppercase, or write `[PAUSE]`), set it as in_progress, then STOP: end your turn with a 3–5 line summary of the plan and what task #1 proved.
 
 Budget: this phase should stay compact (~7–10 exploration steps). If you cannot
 converge on a plan, say so and stop instead of thrashing.
