@@ -51,19 +51,15 @@ type Phase = "idle" | "frontier" | "paused" | "executor"
 
 interface PrewalkState {
   phase: Phase
-  autoSwap: boolean // --no-pause -> swap without waiting for confirmation
+  autoSwap: boolean
   pauseSeen: boolean
   todosRemaining: number
   maxTodos: number
   confirmations: string[]
   lastHandledUserMessageID?: string
-  // After swapToExecutor we watch the next user message written by the server
-  // and check its `agent` field matches the executor, so a silently failed /
-  // fallback-to-default swap surfaces as an error toast instead of going
-  // undetected until the user inspects an export.
-  awaitingSwapVerification?: boolean
-  verifiedMessageID?: string
-  readyToSwap?: boolean
+  readyToSwap?: boolean      // P4: auto-swap deferred to session.idle
+  frontierTodosEverSeen?: boolean // P11: detect trivial path
+  pendingFrontierContinue?: boolean // P5: single-todo continuation pending
 }
 
 interface PrewalkDefaults {
@@ -388,6 +384,8 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           const todos: Todo[] = event.properties.todos ?? []
           if (todos.length === 0) return
 
+          if (st.phase === "frontier" && todos.length > 0) st.frontierTodosEverSeen = true
+
           st.todosRemaining = countRemaining(todos)
           const pausePresent = todos.some(isPauseTodo)
           if (pausePresent) st.pauseSeen = true
@@ -401,14 +399,6 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
             return
           }
 
-          // frontier / paused: only act at the ⏸️ checkpoint.
-          if (!pausePresent) return
-
-          const real = todos.filter((t) => !isPauseTodo(t)).length
-          if (st.phase === "frontier" && real > st.maxTodos) {
-            toast(`prewalk: ${real} todos > cap ${st.maxTodos} — plan may be too large`, "warning")
-          }
-
           if (st.todosRemaining === 0) {
             toast("prewalk: plan already completed in the frontier phase — no handoff needed", "success")
             await log("info", "prewalk: nothing left to hand off", { sessionID })
@@ -416,18 +406,27 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
             return
           }
           if (st.todosRemaining === 1) {
-            // Swap overhead exceeds the savings for a single todo — finish on
-            // the current agent, no swap, no kickoff.
-            st.phase = "executor"
-            toast("prewalk: only 1 todo left — handoff skipped, finishing on the current agent")
-            await log("info", "prewalk: handoff skipped (1 todo left)", { sessionID })
+            // P5: a single remaining todo is not worth a model swap. In auto mode
+            // defer a frontier continuation prompt to session.idle so the frontier's
+            // current turn completes. In manual mode stay passive with an honest toast.
+            if (st.autoSwap) {
+              st.phase = "executor" // honorary "executor" so the completion toast fires when this todo resolves
+              st.readyToSwap = false
+              st.pendingFrontierContinue = true
+            } else {
+              st.phase = "paused"
+              toast("prewalk: only 1 todo left — no handoff. Send any message to finish on the current agent, or tick the todo off manually.")
+              await log("info", "prewalk: 1 todo left — passive manual", { sessionID })
+            }
             return
           }
 
           if (st.autoSwap) {
-            // Defer to session.idle (Task 5 / P4) — do NOT swap mid-frontier-turn.
-            st.readyToSwap = true
-          } else if (st.phase === "frontier") {
+            st.readyToSwap = true // P4: actually swap on session.idle, not mid-turn
+            return
+          }
+
+          if (st.phase === "frontier") {
             st.phase = "paused"
             toast(
               "prewalk ⏸️ PAUSE — review the plan and task #1, then run `/pw-go` to hand off, or `/pw-revise <changes>` to revise",
@@ -447,40 +446,6 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           if (!info || info.role !== "user" || info.sessionID === undefined) return
           const st = states.get(info.sessionID)
           if (!st) return
-
-          // Post-swap verification: the first user message the server writes
-          // after swapToExecutor (the kickoff) must carry agent === executor.
-          // If it carries the session's default agent instead, the persistent
-          // switch silently failed and the executor never took over — surface
-          // it loudly instead of letting it masquerade as success.
-          if (st.phase === "executor" && st.awaitingSwapVerification) {
-            if (st.verifiedMessageID === info.id || st.lastHandledUserMessageID === info.id) return
-            const actualAgent = info.agent
-            if (actualAgent === AGENT_EXECUTOR) {
-              st.awaitingSwapVerification = false
-              st.verifiedMessageID = info.id
-              await log("info", "prewalk: swap verified", {
-                sessionID: info.sessionID,
-                agent: actualAgent,
-                model: info.model ? modelLabel(info.model) : null,
-              })
-            } else {
-              st.awaitingSwapVerification = false
-              st.verifiedMessageID = info.id
-              toast(
-                `prewalk: swap NON riuscito — il messaggio successivo gira su agent ` +
-                  `"${actualAgent}", atteso "${AGENT_EXECUTOR}". Verifica ` +
-                  `.opencode/agent/prewalk-executor.md e \`opencode agent list\`.`,
-                "warning",
-              )
-              await log("warn", "prewalk: swap verification failed", {
-                sessionID: info.sessionID,
-                expected: AGENT_EXECUTOR,
-                actual: actualAgent,
-              })
-            }
-            return
-          }
 
           if (st.phase !== "paused") return
           if (st.lastHandledUserMessageID === info.id) return
@@ -502,6 +467,58 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
             })
             toast("prewalk: prefer `/pw-revise <changes>` to revise reliably — legacy revision kept on frontier", "info")
           }
+          return
+        }
+
+        case "session.idle": {
+          const sessionID = event.properties.sessionID
+          const st = states.get(sessionID)
+          if (!st) return
+
+          // P11: trivial path — frontier finished without ever adding a todo list.
+          if (st.phase === "frontier" && !st.pauseSeen && !st.frontierTodosEverSeen) {
+            st.phase = "idle"
+            await log("info", "prewalk: trivial path — protocol not engaged", { sessionID })
+            return
+          }
+
+          // P4 defense: the frontier produced a todo list but never the ⏸️ checkpoint.
+          if (st.phase === "frontier" && st.frontierTodosEverSeen && !st.pauseSeen) {
+            toast("prewalk: checkpoint todo not detected — check the todo list format", "warning")
+            await log("warn", "prewalk: frontier finished with todos but no ⏸️ checkpoint", { sessionID })
+          }
+
+          // P4: deferred auto-swap once the frontier turn has fully completed.
+          if (st.phase === "frontier" && st.autoSwap && st.readyToSwap) {
+            st.readyToSwap = false
+            await swapToExecutor(sessionID, st)
+            return
+          }
+
+          // P5: auto-mode continuation for the single-todo case (agent stays frontier).
+          if (st.phase === "executor" && st.pendingFrontierContinue) {
+            st.pendingFrontierContinue = false
+            await client.session
+              .prompt({
+                path: { id: sessionID },
+                body: {
+                  agent: AGENT_FRONTIER,
+                  parts: [
+                    {
+                      type: "text",
+                      text:
+                        "Only one todo remains: check off the ⏸️ PAUSE item and complete the last todo now, verifying it before marking it completed.",
+                    },
+                  ],
+                },
+              })
+              .catch(async (e: unknown) => {
+                toast("prewalk: auto-continue failed — finish the last todo manually", "warning")
+                await log("warn", "prewalk: single-todo continue failed", { sessionID, error: `${e}` })
+              })
+            return
+          }
+
           return
         }
 
