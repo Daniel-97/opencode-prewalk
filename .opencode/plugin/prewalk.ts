@@ -32,6 +32,13 @@
 import type { Plugin, Config } from "@opencode-ai/plugin"
 import type { Event, Todo, Agent, TextPart, Part, Message } from "@opencode-ai/sdk"
 import { createOpencodeClient as createV2Client } from "@opencode-ai/sdk/v2"
+import {
+  AGENT_FRONTIER,
+  AGENT_EXECUTOR,
+  isPauseTodo,
+  countRemaining,
+  isConfirmation,
+} from "./prewalk-helpers"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -64,10 +71,6 @@ interface PrewalkDefaults {
 
 const VERSION = "0.2.0"
 
-const AGENT_FRONTIER = "prewalk-frontier"
-const AGENT_EXECUTOR = "prewalk-executor"
-const PAUSE_MARKER = "⏸️"
-
 const DEFAULT_CONFIRMATIONS = [
   "",
   "continue",
@@ -87,24 +90,6 @@ const DEFAULT_CONFIRMATIONS = [
 const executorKickoff =
   "Continue from the checkpoint: check off the ⏸️ PAUSE todo and proceed with " +
   "the remaining todos in order, one at a time, verifying each before moving on."
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function isPauseTodo(t: Todo): boolean {
-  const content = t?.content ?? ""
-  return content.trimStart().startsWith(PAUSE_MARKER)
-}
-
-function countRemaining(todos: Todo[]): number {
-  return todos.filter((t) => t.status !== "completed" && !isPauseTodo(t)).length
-}
-
-function isConfirmation(text: string, confirmations: string[]): boolean {
-  const t = text.trim().toLowerCase()
-  return confirmations.some((c) => c.trim().toLowerCase() === t)
-}
 
 function loadDefaults(directory: string): PrewalkDefaults {
   const out: PrewalkDefaults = {
