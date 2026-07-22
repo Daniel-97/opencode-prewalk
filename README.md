@@ -27,7 +27,7 @@ The idea in one line: an agent's cost is in the **reads**, not the edits. Instea
        opencode-prewalk-main/.opencode/agent
    ```
 
-2. **Pin a cheaper executor model** (required for the cost savings). Either set `model:` in `.opencode/agent/prewalk-executor.md`, or add `"executor": "openrouter/deepseek/deepseek-chat"` to `.opencode/prewalk.json`. Without one, prewalk still hands off but the executor runs on the frontier model — the ~50% cost saving does not apply.
+2. **Pin a cheaper executor model** (required for the cost savings). For `/pw-go`, pin `model:` in `.opencode/agent/prewalk-executor.md` so the executor actually runs on the cheaper model. The optional `.opencode/prewalk.json` `"executor"` override is used only when the plugin performs the handoff itself (auto-swap / legacy free-form confirmations). Without a pin, the handoff may change agent but not model — the ~50% cost saving does not apply.
 
 3. Restart OpenCode — the `/prewalk` command (alias `/pw`) is registered automatically at startup.
 
