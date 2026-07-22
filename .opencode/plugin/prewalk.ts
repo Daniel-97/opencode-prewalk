@@ -21,13 +21,17 @@
  *   Phase "executor":  the `prewalk-executor` agent takes over (prompt + model
  *                      baked into .opencode/agent/prewalk-executor.md).
  *
- * No experimental APIs are used. Phase swap is driven by the Agents system
- * plus the stable hooks `config`, `command.execute.before` and the stable
- * events `session.created`, `session.deleted`, `todo.updated`, `message.updated`.
+ * The persistent agent/model switch at the checkpoint uses the v2 SDK
+ * (`@opencode-ai/sdk/v2`) switchAgent/switchModel endpoints — the v1
+ * `session.prompt({ agent })` is only a per-turn override and does not change
+ * the session's selected agent, so it cannot reliably hand off. Hooks/events
+ * used: `config`, `command.execute.before`, and the stable events
+ * `session.created`, `session.deleted`, `todo.updated`, `message.updated`.
  */
 
 import type { Plugin, Config } from "@opencode-ai/plugin"
 import type { Event, Todo, Agent, TextPart, Part, Message } from "@opencode-ai/sdk"
+import { createOpencodeClient as createV2Client } from "@opencode-ai/sdk/v2"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -45,6 +49,12 @@ interface PrewalkState {
   maxTodos: number
   confirmations: string[]
   lastHandledUserMessageID?: string
+  // After swapToExecutor we watch the next user message written by the server
+  // and check its `agent` field matches the executor, so a silently failed /
+  // fallback-to-default swap surfaces as an error toast instead of going
+  // undetected until the user inspects an export.
+  awaitingSwapVerification?: boolean
+  verifiedMessageID?: string
 }
 
 interface PrewalkDefaults {
@@ -133,10 +143,22 @@ function initialState(defaults: PrewalkDefaults, autoSwap: boolean): PrewalkStat
 // Plugin
 // ---------------------------------------------------------------------------
 
-export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
+export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) => {
   const dir = directory ?? process.cwd()
   const defaults = loadDefaults(dir)
   const states = new Map<string, PrewalkState>()
+
+  // The stable v1 client (`client`) exposes no persistent agent-switch call:
+  // `session.prompt({ agent })` is a per-turn override that does NOT change the
+  // session's selected agent, so subsequent user messages fall back to the
+  // session's default agent (e.g. `build`). The persistent switch lives in the
+  // v2 API under the nested `.v2` namespace: `POST /api/session/{id}/agent`
+  // ("Switch the agent used by subsequent provider turns"). We build a v2
+  // client bound to the same server therefore.
+  const v2client = createV2Client({
+    baseUrl: serverUrl?.origin ?? "http://localhost:4096",
+    directory: dir,
+  })
 
   const log = (
     level: "info" | "warn",
@@ -169,12 +191,60 @@ export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
     }
   }
 
-  /** Swap the session to the executor agent and run the kickoff prompt. */
+  /** Persistently switch this session's selected agent+model, then kick off. */
   const swapToExecutor = async (sessionID: string, st: PrewalkState) => {
-    st.phase = "executor"
     const executorModel = await resolveAgentModel(AGENT_EXECUTOR)
-    // Explicit swap toast, emitted right at the handoff call: don't rely on
-    // the native UI to surface the agent/model change before the next render.
+    // Diagnostic: log the exact values we are about to send to switchAgent /
+    // switchModel so a fallback-to-default cannot hide behind assumptions.
+    await log("info", "prewalk: swap → sending", {
+      sessionID,
+      agent: AGENT_EXECUTOR,
+      model: executorModel ? modelLabel(executorModel) : null,
+    })
+
+    // 1) Persistent switch of the session's agent (v2 endpoint). The kickoff
+    //    prompt's per-turn `agent` override alone is NOT enough — it does not
+    //    change the session's selected agent, so every turn after the kickoff
+    //    would revert to the session's default agent.
+    try {
+      await v2client.v2.session.switchAgent({ sessionID, agent: AGENT_EXECUTOR })
+    } catch (e: unknown) {
+      st.phase = "paused"
+      toast(
+        `prewalk: switchAgent fallito — agent "${AGENT_EXECUTOR}" non risolvibile. ` +
+          `Verifica .opencode/agent/prewalk-executor.md e \`opencode agent list\`.`,
+        "warning",
+      )
+      await log("warn", "prewalk: switchAgent failed", {
+        sessionID,
+        agent: AGENT_EXECUTOR,
+        error: `${e}`,
+      })
+      return
+    }
+
+    // 2) If the executor agent pins a model, switch it persistently too (same
+    //    reason: only the kickoff turn would otherwise use it).
+    if (executorModel) {
+      try {
+        await v2client.v2.session.switchModel({
+          sessionID,
+          model: { id: executorModel.modelID, providerID: executorModel.providerID },
+        })
+      } catch (e: unknown) {
+        await log("warn", "prewalk: switchModel failed (continuing)", {
+          sessionID,
+          model: modelLabel(executorModel),
+          error: `${e}`,
+        })
+      }
+    }
+
+    st.phase = "executor"
+    st.awaitingSwapVerification = true
+    st.verifiedMessageID = undefined
+    // Explicit swap toast, emitted right at the handoff: don't rely on the
+    // native UI to surface the agent/model change before the next render.
     toast(
       `→ passato a ${AGENT_EXECUTOR}${executorModel ? ` (modello ${modelLabel(executorModel)})` : ""}`,
       "success",
@@ -183,18 +253,19 @@ export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
       sessionID,
       executor: modelLabel(executorModel),
     })
+
+    // 3) Kickoff. No per-turn `agent`/`model` override is passed: the
+    //    persistent switch above is now the source of truth, and leaving the
+    //    override out lets the post-swap verification prove it actually took
+    //    (the kickoff user message's `agent` must be prewalk-executor).
     await client.session
       .prompt({
         path: { id: sessionID },
-        body: {
-          agent: AGENT_EXECUTOR,
-          ...(executorModel ? { model: executorModel } : {}),
-          parts: [{ type: "text", text: executorKickoff }],
-        },
+        body: { parts: [{ type: "text", text: executorKickoff }] },
       })
       .catch(async (e: unknown) => {
         toast("prewalk: handoff failed — continue manually on the executor agent", "warning")
-        await log("warn", "prewalk: handoff failed", { sessionID, error: `${e}` })
+        await log("warn", "prewalk: kickoff failed", { sessionID, error: `${e}` })
       })
   }
 
@@ -348,12 +419,48 @@ export const PrewalkPlugin: Plugin = async ({ client, directory }) => {
           return
         }
 
-        // ---- user response at the checkpoint ----
+        // ---- user response at the checkpoint, and post-swap verification ----
         case "message.updated": {
           const info: Message | undefined = event.properties.info
           if (!info || info.role !== "user" || info.sessionID === undefined) return
           const st = states.get(info.sessionID)
-          if (!st || st.phase !== "paused") return
+          if (!st) return
+
+          // Post-swap verification: the first user message the server writes
+          // after swapToExecutor (the kickoff) must carry agent === executor.
+          // If it carries the session's default agent instead, the persistent
+          // switch silently failed and the executor never took over — surface
+          // it loudly instead of letting it masquerade as success.
+          if (st.phase === "executor" && st.awaitingSwapVerification) {
+            if (st.verifiedMessageID === info.id || st.lastHandledUserMessageID === info.id) return
+            const actualAgent = info.agent
+            if (actualAgent === AGENT_EXECUTOR) {
+              st.awaitingSwapVerification = false
+              st.verifiedMessageID = info.id
+              await log("info", "prewalk: swap verified", {
+                sessionID: info.sessionID,
+                agent: actualAgent,
+                model: info.model ? modelLabel(info.model) : null,
+              })
+            } else {
+              st.awaitingSwapVerification = false
+              st.verifiedMessageID = info.id
+              toast(
+                `prewalk: swap NON riuscito — il messaggio successivo gira su agent ` +
+                  `"${actualAgent}", atteso "${AGENT_EXECUTOR}". Verifica ` +
+                  `.opencode/agent/prewalk-executor.md e \`opencode agent list\`.`,
+                "warning",
+              )
+              await log("warn", "prewalk: swap verification failed", {
+                sessionID: info.sessionID,
+                expected: AGENT_EXECUTOR,
+                actual: actualAgent,
+              })
+            }
+            return
+          }
+
+          if (st.phase !== "paused") return
           if (st.lastHandledUserMessageID === info.id) return
           st.lastHandledUserMessageID = info.id
 
