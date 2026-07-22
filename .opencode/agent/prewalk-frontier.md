@@ -1,7 +1,8 @@
 ---
 description: Prewalk frontier planner — explores, plans, lands task #1, then stops at the handoff checkpoint
 mode: primary
-model: anthropic/claude-opus-4-8
+# No model pin: runs on the session's active model. To pin one, set it here, e.g.
+# model: anthropic/claude-opus-4-8
 permission:
   edit: allow
   bash: allow

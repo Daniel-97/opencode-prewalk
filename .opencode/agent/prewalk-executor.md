@@ -1,7 +1,8 @@
 ---
 description: Prewalk executor — works the remaining todos in order, one at a time, verifying each
 mode: primary
-model: openrouter/deepseek/deepseek-chat
+# No model pin: runs on the session's active model. For the cost savings that are
+# the point of prewalk, pin a cheaper model here, e.g. model: openrouter/deepseek/deepseek-chat
 permission:
   edit: allow
   bash: allow
