@@ -59,5 +59,5 @@ test("parseExecutorModel splits on the FIRST slash (multi-segment model IDs)", (
   })
   assert.equal(parseExecutorModel(""), undefined)
   assert.equal(parseExecutorModel("   "), undefined)
-  assert.deepEqual(parseExecutorModel("noprovider/"), { providerID: "noprovider", modelID: "" })
+  assert.equal(parseExecutorModel("noprovider/"), undefined)
 })
