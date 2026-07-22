@@ -7,7 +7,6 @@ permission:
   edit: allow
   bash: allow
   webfetch: deny
-  websearch: deny
 ---
 
 You are running the PREWALK protocol, phase 1 (frontier planner). Follow it exactly.

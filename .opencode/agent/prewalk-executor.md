@@ -7,7 +7,6 @@ permission:
   edit: allow
   bash: allow
   webfetch: deny
-  websearch: deny
 ---
 
 You are continuing the PREWALK protocol, phase 3 (executor). The exploration,
