@@ -1,5 +1,5 @@
 {
   "maxTodos": 12,
-  "confirmations": ["", "continue", "ok", "go", "yes", "proceed", "y", "next", "done"],
+  "confirmations": ["continue", "ok", "go", "yes", "proceed", "y", "next", "done"],
   "executor": "openrouter/deepseek/deepseek-chat"
 }
