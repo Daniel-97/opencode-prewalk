@@ -390,6 +390,15 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           const pausePresent = todos.some(isPauseTodo)
           if (pausePresent) st.pauseSeen = true
 
+          // If this update contains no ⏸️ pause todo, it's not a checkpoint
+          // event — skip the checkpoint/guardrail logic entirely.
+          if (!pausePresent) return
+
+          const real = todos.filter((t) => !isPauseTodo(t)).length
+          if (st.phase === "frontier" && real > st.maxTodos) {
+            toast(`prewalk: ${real} todos > cap ${st.maxTodos} — plan may be too large`, "warning")
+          }
+
           if (st.phase === "executor") {
             if (st.todosRemaining === 0) {
               toast("prewalk: all todos completed ✅", "success")
