@@ -9,11 +9,8 @@
  *
  *   Phase "frontier":  the `prewalk-frontier` agent (prompt + optional model pin
  *                      in .opencode/agent/prewalk-frontier.md) explores, creates
- *                      a todo list, completes task #1, adds a ⏸️ checkpoint todo
- *                      and stops.
  *   Swap gate:         the ⏸️ checkpoint todo is detected via the stable
- *                      `todo.updated` event (marker: "⏸ PAUSE" / "PAUSE" / "[PAUSE]").
- *   Checkpoint:
+ *                      `todo.updated` event (marker: leading "⏸" emoji OR "PAUSE" / "[PAUSE]" at the start).
  *     - manual mode (default): the plugin pauses and toasts. `/pw-go` (alias
  *       /pwg) confirms and hands off — the command itself carries
  *       agent=prewalk-executor, so the handoff is race-free. `/pw-revise <text>`
