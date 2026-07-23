@@ -27,7 +27,7 @@ The idea in one line: an agent's cost is in the **reads**, not the edits. Instea
        opencode-prewalk-main/.opencode/agent
    ```
 
-2. **Pin a cheaper executor model** (required for the cost savings). For `/pw-go`, pin `model:` in `.opencode/agent/prewalk-executor.md` so the executor actually runs on the cheaper model. The optional `.opencode/prewalk.json` `"executor"` override is used only when the plugin performs the handoff itself (auto-swap / legacy free-form confirmations). Without a pin, the handoff may change agent but not model — the ~50% cost saving does not apply.
+2. **Pin a cheaper executor model** (required for the cost savings): set `model:` in `.opencode/agent/prewalk-executor.md` **or** set `"executor"` in `.opencode/prewalk.json`. The `prewalk.json` key takes precedence and applies everywhere — `/pw-go`, auto-swap (`--no-pause`) and legacy free-form confirmations. Without either, the handoff changes agent but not model — the ~50% cost saving does not apply, and the plugin warns.
 
 3. Restart OpenCode — the `/prewalk` command (alias `/pw`) is registered automatically at startup.
 
@@ -40,7 +40,7 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 }
 ```
 
-- `executor` — (optional) `"provider/model-id"` pin for the executor, with precedence over any pin in `prewalk-executor.md`. The split is on the FIRST `/`, so multi-segment IDs like `"openrouter/deepseek/deepseek-chat"` work. Without this OR a pin in `prewalk-executor.md` the handoff warns and runs on the session's model — no cost savings.
+- `executor` — (optional) `"provider/model-id"` pin for the executor, with precedence over any pin in `prewalk-executor.md`; it is applied to `/pw-go` (as the command's model), to auto-swap and to legacy confirmations. The split is on the FIRST `/`, so multi-segment IDs like `"openrouter/deepseek/deepseek-chat"` work. Without this OR a pin in `prewalk-executor.md` the handoff warns and runs on the session's model — no cost savings. Changes are picked up at the next OpenCode restart.
 - `maxTodos` — threshold (default 12) for the "plan may be too large" warning when the frontier exceeds it. It governs only the warning — the actual list cap lives in the frontier agent's prompt. They are kept aligned by convention; changing one does not change the other.
 - `confirmations` — (deprecated fallback) the set of bare user messages treated as "confirm the plan" at the ⏸️ checkpoint when the user does NOT run `/pw-go`. Prefer `/pw-go`. Defaults to a small set not including the empty string (a blank message does NOT confirm — add `""` to the array if you need that). Anything not matching stays on the frontier.
 
@@ -56,7 +56,7 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 | *(none)* | **Manual mode (command-driven)**: at the ⏸️ checkpoint you get a toast; review the plan and task #1, then run `/pw-go` to hand off to the executor, or `/pw-revise <changes>` to update the plan on the frontier (typing a free-form "continue" still works as a deprecated fallback) |
 | `--no-pause` | **Auto-swap**: when the ⏸️ checkpoint todo is added, the plugin hands off to the `prewalk-executor` agent immediately (no waiting for confirmation) |
 
-The todo cap and the confirmation set are configured in `prewalk.json` (`maxTodos`, `confirmations`), not via flags. The executor model is pinned in `prewalk-executor.md`, not selected by a flag.
+Nothing else is selected via flags: the executor model comes from the `model:` pin in `prewalk-executor.md` or the `executor` key in `prewalk.json`; `maxTodos` (warning threshold) and the legacy `confirmations` set also live in `prewalk.json`.
 
 ## Differences from the article
 
@@ -77,8 +77,20 @@ The installed version is the `VERSION` constant at the top of `prewalk.ts`. To c
 ## Limitations
 
 - **In-memory state:** prewalk's phase machine lives in the plugin process. A restart of OpenCode mid-prewalk loses it; resume manually by sending a continuation message (`/pw-go` or any prompt to the executor). The todo list and conversation context survive in the session.
-- **Checkpoint format:** the handoff gates on a todo whose content starts with `⏸️ PAUSE`, `PAUSE`, or `[PAUSE]` (uppercase). If the frontier emits it differently the protocol silently does not engage — the plugin warns on `session.idle` when a todo list exists without a detected checkpoint.
+- **Checkpoint format:** the handoff gates on a todo whose content starts with `⏸️` (with or without the word `PAUSE`), `PAUSE`, or `[PAUSE]` (uppercase). If the frontier emits it differently the protocol silently does not engage — the plugin warns on `session.idle` when a todo list exists without a detected checkpoint.
 - **Model pin required for savings:** without a pinned executor model (agent file or `prewalk.json` `executor` key) the handoff changes agent but not model — the cost savings do not apply.
+- **TUI agent selection is not switched by the plugin:** the handoff routes the kickoff turn (and everything the executor does inside it) to `prewalk-executor`, but messages you type by hand afterwards follow the agent currently selected in the TUI. If you keep working in the session after the handoff, select `prewalk-executor` (Tab) first.
+- **Invalid `/pw-go` / `/pw-revise` cannot be cancelled, only neutralized:** OpenCode always executes a command's turn; outside the ⏸️ checkpoint the plugin rewrites it into a one-line no-op and warns.
+
+## Development
+
+The dev toolchain (typecheck + unit tests) lives at the repo root and is **not** part of the install — only `.opencode/` is copied. Do not add a `package.json` inside `.opencode/`: OpenCode installs any dependencies declared there at startup. Note that OpenCode auto-loads every top-level `*.ts` file in `.opencode/plugin/` as a plugin, which is why the helpers live in `.opencode/plugin/lib/` (subdirectories are not scanned) and the tests live in `test/`.
+
+```sh
+npm install
+npm run typecheck
+npm test
+```
 
 ## Attribution
 

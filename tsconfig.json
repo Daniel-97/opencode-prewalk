@@ -7,8 +7,7 @@
     "moduleResolution": "bundler",
     "target": "esnext",
     "types": ["node"],
-    "lib": ["esnext"],
-    "exactOptionalPropertyTypes": false
+    "lib": ["esnext"]
   },
-  "include": ["plugin/**/*.ts"]
+  "include": [".opencode/plugin/**/*.ts", "test/**/*.ts"]
 }

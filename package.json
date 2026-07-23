@@ -1,0 +1,17 @@
+{
+  "name": "opencode-prewalk-dev",
+  "private": true,
+  "type": "module",
+  "description": "Dev toolchain for opencode-prewalk (typecheck + unit tests). Not shipped: only .opencode/ is copied on install.",
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.4",
+    "@opencode-ai/sdk": "^1.18.4",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.23.1",
+    "typescript": "^5.8.3"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "tsx --test test/*.test.ts"
+  }
+}

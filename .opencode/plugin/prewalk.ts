@@ -5,28 +5,33 @@
  * Skill/prompt structure inspired by westfable/hermes-prewalk (MIT).
  *
  * Flow:
- *   /prewalk <task> [--no-pause]
+ *   /prewalk <task> [--no-pause]   (alias /pw)
  *
- *   Phase "frontier":  the `prewalk-frontier` agent (its system prompt and
- *                      pinned model are baked into .opencode/agent/prewalk-frontier.md)
- *                      explores, creates a todo list, completes task #1, adds a
- *                      ⏸️ checkpoint todo and stops.
- *   Swap gate:         the ⏸️ checkpoint todo is added (detected via the stable
- *                      `todo.updated` event, recognized by the leading "⏸️" marker).
- *   Checkpoint:        the plugin pauses the session and toasts the user.
- *                      - manual mode (default) -> the user reviews the plan; a
- *                        confirmation message swaps to the `prewalk-executor`
- *                        agent, a revision request is left for the frontier agent.
- *                      - auto mode (`--no-pause`) -> the plugin swaps immediately.
- *   Phase "executor":  the `prewalk-executor` agent takes over (prompt + model
- *                      baked into .opencode/agent/prewalk-executor.md).
+ *   Phase "frontier":  the `prewalk-frontier` agent (prompt + optional model pin
+ *                      in .opencode/agent/prewalk-frontier.md) explores, creates
+ *   Swap gate:         the ⏸️ checkpoint todo is detected via the stable
+ *                      `todo.updated` event (marker: leading "⏸" emoji OR "PAUSE" / "[PAUSE]" at the start).
+ *     - manual mode (default): the plugin pauses and toasts. `/pw-go` (alias
+ *       /pwg) confirms and hands off — the command itself carries
+ *       agent=prewalk-executor, so the handoff is race-free. `/pw-revise <text>`
+ *       (alias /pwr) routes a revision to the frontier agent. Free-form
+ *       "continue"-style confirmations still work as a deprecated fallback.
+ *     - auto mode (--no-pause): the swap is deferred to `session.idle` so the
+ *       frontier turn (including its summary) completes, then the plugin sends
+ *       the kickoff itself.
+ *   Phase "executor":  the `prewalk-executor` agent works the remaining todos.
  *
- * The persistent agent/model switch at the checkpoint uses the v2 SDK
- * (`@opencode-ai/sdk/v2`) switchAgent/switchModel endpoints — the v1
- * `session.prompt({ agent })` is only a per-turn override and does not change
- * the session's selected agent, so it cannot reliably hand off. Hooks/events
- * used: `config`, `command.execute.before`, and the stable events
- * `session.created`, `session.deleted`, `todo.updated`, `message.updated`.
+ * How the swap actually works: the ONLY mechanism OpenCode's V1 prompt path
+ * honors is the per-turn `agent`/`model` override on the prompt (or the
+ * `agent`/`model` fields of a command). Prompts sent WITHOUT `agent` resolve to
+ * the configured default agent — NOT to any previously "switched" agent. The
+ * V2 switchAgent/switchModel endpoints only update V2 session state and the UI
+ * "agent switched" marker, so they are called best-effort and never trusted
+ * for the handoff itself.
+ *
+ * Hooks/events used: `config`, `command.execute.before`, and the stable events
+ * `session.created`, `session.deleted`, `todo.updated`, `message.updated`,
+ * `session.idle`.
  */
 
 import type { Plugin, Config } from "@opencode-ai/plugin"
@@ -39,7 +44,7 @@ import {
   countRemaining,
   isConfirmation,
   parseExecutorModel,
-} from "./prewalk-helpers"
+} from "./lib/prewalk-helpers"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -51,16 +56,16 @@ type Phase = "idle" | "frontier" | "paused" | "executor"
 
 interface PrewalkState {
   phase: Phase
-  autoSwap: boolean
+  autoSwap: boolean // --no-pause -> swap without waiting for confirmation
   pauseSeen: boolean
   todosRemaining: number
   maxTodos: number
   confirmations: string[]
   lastHandledUserMessageID?: string
-  readyToSwap?: boolean      // P4: auto-swap deferred to session.idle
-  frontierTodosEverSeen?: boolean // P11: detect trivial path
-  anomalyWarned?: boolean     // P4 defense: one-shot toast guard
-  pendingFrontierContinue?: boolean // P5: single-todo continuation pending
+  readyToSwap?: boolean // R/P4: auto-swap deferred to session.idle
+  frontierTodosEverSeen?: boolean // P11: distinguish trivial path from anomaly
+  anomalyWarned?: boolean // one-shot guard for the missing-checkpoint warning
+  pendingFrontierContinue?: boolean // P5: single-todo auto continuation pending
 }
 
 interface PrewalkDefaults {
@@ -69,7 +74,7 @@ interface PrewalkDefaults {
   executor?: { providerID: string; modelID: string }
 }
 
-const VERSION = "0.2.0"
+const VERSION = "0.3.0"
 
 const DEFAULT_CONFIRMATIONS = [
   "continue",
@@ -89,6 +94,22 @@ const DEFAULT_CONFIRMATIONS = [
 const executorKickoff =
   "Check off the ⏸️ PAUSE todo and proceed with the remaining todos in order, one at a time, " +
   "verifying each before marking it completed."
+
+const singleTodoContinue =
+  "Only one todo remains: check off the ⏸️ PAUSE item and complete the last todo now, " +
+  "verifying it before marking it completed."
+
+const noActiveRunNoop =
+  "There is no active prewalk checkpoint in this session. " +
+  "Reply with a single line saying so and end your turn — do not touch the todo list or any file."
+
+const noPinWarning =
+  `prewalk: ${AGENT_EXECUTOR} has no pinned model — the handoff will NOT change model or cost. ` +
+  `Pin a cheaper model in .opencode/agent/prewalk-executor.md or set "executor" in .opencode/prewalk.json`
+
+// ---------------------------------------------------------------------------
+// Config loading
+// ---------------------------------------------------------------------------
 
 function loadDefaults(directory: string): PrewalkDefaults {
   const out: PrewalkDefaults = {
@@ -136,13 +157,9 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
   const defaults = loadDefaults(dir)
   const states = new Map<string, PrewalkState>()
 
-  // The stable v1 client (`client`) exposes no persistent agent-switch call:
-  // `session.prompt({ agent })` is a per-turn override that does NOT change the
-  // session's selected agent, so subsequent user messages fall back to the
-  // session's default agent (e.g. `build`). The persistent switch lives in the
-  // v2 API under the nested `.v2` namespace: `POST /api/session/{id}/agent`
-  // ("Switch the agent used by subsequent provider turns"). We build a v2
-  // client bound to the same server therefore.
+  // V2 client for the best-effort switchAgent/switchModel calls (they update
+  // the V2 session state and the UI "agent switched" marker). They are NOT the
+  // source of truth for the handoff — see the header comment.
   const v2client = createV2Client({
     baseUrl: serverUrl?.origin ?? "http://localhost:4096",
     directory: dir,
@@ -168,7 +185,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
 
   await log("info", "prewalk plugin loaded", { version: VERSION })
 
-  /** Resolve the model pinned on an agent definition, if any. */
+  /** Resolve the executor model: prewalk.json `executor` wins over the agent-file pin. */
   const resolveAgentModel = async (agentName: string) => {
     if (agentName === AGENT_EXECUTOR && defaults.executor) return defaults.executor
     try {
@@ -180,7 +197,22 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
     }
   }
 
-  /** Persistently switch this session's selected agent+model, then kick off. */
+  /**
+   * R1: `command.execute.before` cannot cancel a command — the turn runs no
+   * matter what. When a prewalk command is invalid in the current state, the
+   * best we can do is rewrite its parts into an explicit no-op instruction so
+   * the model does nothing instead of executing a stale kickoff/revision.
+   */
+  const neutralize = (output: { parts: Part[] }, text: string) => {
+    const textPart = output.parts.find((p): p is TextPart => p.type === "text")
+    if (textPart) textPart.text = text
+    else
+      output.parts = [
+        { id: "", sessionID: "", messageID: "", type: "text", text } as TextPart,
+      ]
+  }
+
+  /** Hand off to the executor: best-effort V2 switch, then explicit kickoff. */
   const swapToExecutor = async (sessionID: string, st: PrewalkState) => {
     const executorModel = await resolveAgentModel(AGENT_EXECUTOR)
     await log("info", "prewalk: swap → sending", {
@@ -189,11 +221,17 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
       model: executorModel ? modelLabel(executorModel) : null,
     })
 
-    // 1) Persistent V2 agent/model switch — best-effort. It updates the UI
-    //    "agent switched" marker and the session's V2 state, but is NOT the
-    //    source of truth for the executor turn: the kickoff below carries an
-    //    explicit per-turn `agent`+`model` override (the only thing V1
-    //    createUserMessage actually consults). So failures here are warnings.
+    // R3: without a pinned model (agent file or prewalk.json) the swap changes
+    // agent but not model — the cost savings that motivate prewalk do not
+    // apply. Never let that happen silently.
+    if (!executorModel) {
+      toast(noPinWarning, "warning")
+      await log("warn", "prewalk: executor has no pinned model", { sessionID })
+    }
+
+    // 1) Best-effort persistent V2 switch (UI marker + V2 state). Failures are
+    //    warnings only: the kickoff below carries the explicit per-turn
+    //    override, which is the only thing the V1 prompt path honors.
     try {
       await v2client.v2.session.switchAgent({ sessionID, agent: AGENT_EXECUTOR })
       if (executorModel) {
@@ -220,9 +258,9 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
 
     st.phase = "executor"
 
-    // 2) Kickoff with explicit per-turn agent+model — this is the override
-    //    createUserMessage actually honors. `model` shape is { providerID, modelID }
-    //    (V1), NOT the V2 { id, providerID } used by switchModel above.
+    // 2) Kickoff with explicit per-turn agent+model — this is the override the
+    //    V1 prompt path actually honors. NOTE: the V1 `model` shape is
+    //    { providerID, modelID }, not the V2 { id, providerID } used above.
     await client.session
       .prompt({
         path: { id: sessionID },
@@ -253,12 +291,15 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
 
   return {
     // -----------------------------------------------------------------------
-    // 0) Register the /prewalk command (+ alias /pw) on the frontier agent.
-    //    The agent (prompt + pinned model) lives in
-    //    .opencode/agent/prewalk-frontier.md — the single source of truth.
+    // 0) Register the commands. Each command carries its own `agent` (and, for
+    //    /pw-go, the `model` from prewalk.json when set) — command agent/model
+    //    routing is the one reliable per-turn override in the V1 flow.
     // -----------------------------------------------------------------------
     config: async (config: Config) => {
       config.command = config.command ?? {}
+      const executorModelPin = defaults.executor
+        ? `${defaults.executor.providerID}/${defaults.executor.modelID}`
+        : undefined
       const frontierCmd = {
         description:
           "Prewalk — frontier explores, plans, lands the first edit; then hands off to the executor",
@@ -269,13 +310,18 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
         description: "Prewalk — confirm the plan and hand off to the executor now",
         template: executorKickoff,
         agent: AGENT_EXECUTOR,
+        // R3: `model` on a command IS supported by OpenCode and takes
+        // precedence over the agent-file pin, so the prewalk.json `executor`
+        // override applies to /pw-go too. Multi-segment IDs are safe: the
+        // server parses "provider/rest/of/id" splitting on the first slash.
+        ...(executorModelPin ? { model: executorModelPin } : {}),
       }
       const reviseCmd = {
         description: "Prewalk — revise the plan on the frontier agent",
         template: "$ARGUMENTS",
         agent: AGENT_FRONTIER,
       }
-      // Use distinct objects (App.A): a mutation of one must not leak into another.
+      // Use distinct objects: a mutation of one must not leak into another.
       config.command.prewalk = config.command.prewalk ?? structuredClone(frontierCmd)
       config.command.pw = config.command.pw ?? structuredClone(frontierCmd)
       config.command["pw-go"] = config.command["pw-go"] ?? structuredClone(goCmd)
@@ -285,8 +331,8 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
     },
 
     // -----------------------------------------------------------------------
-    // 1) Detect the /prewalk trigger, parse --no-pause, init session state,
-    //    and strip the flag from the message the model will see.
+    // 1) Command handling: /prewalk starts a run; /pw-go and /pw-revise drive
+    //    the checkpoint. Invalid invocations are neutralized (see R1 note).
     // -----------------------------------------------------------------------
     "command.execute.before": async (input, output) => {
       const isPrewalk = input.command === "prewalk" || input.command === "pw"
@@ -304,9 +350,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           .replace(/--no-pause\b/g, "")
           .replace(/\s+/g, " ")
           .trim() || "Proceed with the task."
-        const textPart = output.parts.find((p): p is TextPart => p.type === "text")
-        if (textPart) textPart.text = cleanTask
-        else output.parts = [{ id: "", sessionID: "", messageID: "", type: "text", text: cleanTask } as TextPart]
+        neutralize(output, cleanTask)
         await log("info", "prewalk: frontier phase started", { sessionID, auto: autoSwap })
         toast(
           autoSwap
@@ -317,48 +361,50 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
       }
 
       const st = states.get(sessionID)
-      if (!st) {
-        toast("prewalk: no active run for this session — start with /prewalk (or /pw) first", "warning")
-        return
-      }
+      const atCheckpoint = st !== undefined && st.phase === "paused"
+
       if (isGo) {
-        if (st.phase !== "paused") {
+        if (!atCheckpoint) {
+          neutralize(output, noActiveRunNoop)
           toast(
             "prewalk: /pw-go is only valid at the ⏸️ checkpoint — run /prewalk and wait for the PAUSE todo",
             "warning",
           )
+          await log("warn", "prewalk: /pw-go outside checkpoint — neutralized", { sessionID })
           return
         }
-        // The command template is the kickoff text and the command's own `agent`
-        // is AGENT_EXECUTOR. We just advance the state machine; the model pin is
-        // resolved here and used as a per-turn override via the command's `model`
-        // once OpenCode surfaces such a field — until then rely on the agent pin
-        // (Task 4 emits a warning when there is no pin and no `prewalk.json`
-        // `executor` override).
+        // The command template is the kickoff text; the command's own `agent`
+        // (and `model`, when prewalk.json sets `executor`) route the turn.
+        // Here we only warn on a missing pin and advance the state machine.
         const executorModel = await resolveAgentModel(AGENT_EXECUTOR)
         if (!executorModel) {
-          toast(
-            `prewalk: ${AGENT_EXECUTOR} has no pinned model — the handoff will NOT change model or cost. ` +
-              `Pin a cheaper model in .opencode/agent/prewalk-executor.md or set "executor" in prewalk.json`,
-            "warning",
-          )
+          toast(noPinWarning, "warning")
           await log("warn", "prewalk: executor has no pinned model", { sessionID })
         }
         st.phase = "executor"
-        await log("info", "prewalk: /pw-go handoff", { sessionID })
+        await log("info", "prewalk: /pw-go handoff", {
+          sessionID,
+          model: executorModel ? modelLabel(executorModel) : null,
+        })
         return
       }
 
-      // isRevise: stay paused, the command routes the revision text to the
-      // frontier agent (command.agent === AGENT_FRONTIER). The frontier's own
-      // prompt already tells it to re-add the ⏸️ checkpoint after revising.
-      if (st.phase !== "paused") return
+      // isRevise
+      if (!atCheckpoint) {
+        neutralize(output, noActiveRunNoop)
+        toast("prewalk: /pw-revise is only valid at the ⏸️ checkpoint — nothing to revise", "warning")
+        await log("warn", "prewalk: /pw-revise outside checkpoint — neutralized", { sessionID })
+        return
+      }
+      // Stay paused: the command routes the revision text to the frontier
+      // agent (command.agent === AGENT_FRONTIER), whose prompt re-adds the ⏸️
+      // checkpoint after revising.
       await log("info", "prewalk: /pw-revise revision received — staying on frontier", { sessionID })
       toast("prewalk: plan revised on the frontier — review and /pw-go when ready", "info")
     },
 
     // -----------------------------------------------------------------------
-    // 2) Session lifecycle + checkpoint detection + confirmation handling,
+    // 2) Session lifecycle + checkpoint detection + legacy confirmations,
     //    all through the stable `event` hook.
     // -----------------------------------------------------------------------
     event: async ({ event }: { event: Event }) => {
@@ -393,21 +439,15 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           const todos: Todo[] = event.properties.todos ?? []
           if (todos.length === 0) return
 
-          if (st.phase === "frontier" && todos.length > 0) st.frontierTodosEverSeen = true
+          if (st.phase === "frontier") st.frontierTodosEverSeen = true
 
           st.todosRemaining = countRemaining(todos)
           const pausePresent = todos.some(isPauseTodo)
           if (pausePresent) st.pauseSeen = true
 
-          // If this update contains no ⏸️ pause todo, it's not a checkpoint
-          // event — skip the checkpoint/guardrail logic entirely.
-          if (!pausePresent) return
-
-          const real = todos.filter((t) => !isPauseTodo(t)).length
-          if (st.phase === "frontier" && real > st.maxTodos) {
-            toast(`prewalk: ${real} todos > cap ${st.maxTodos} — plan may be too large`, "warning")
-          }
-
+          // R2: executor completion detection must NOT depend on the ⏸️ todo
+          // still being present — models sometimes rewrite the list without it.
+          // Keep this branch ABOVE the pause-present guard.
           if (st.phase === "executor") {
             if (st.todosRemaining === 0) {
               toast("prewalk: all todos completed ✅", "success")
@@ -417,6 +457,15 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
             return
           }
 
+          // frontier / paused: everything below is checkpoint logic, which only
+          // makes sense when the ⏸️ todo is part of the update.
+          if (!pausePresent) return
+
+          const real = todos.filter((t) => !isPauseTodo(t)).length
+          if (st.phase === "frontier" && real > st.maxTodos) {
+            toast(`prewalk: ${real} todos > cap ${st.maxTodos} — plan may be too large`, "warning")
+          }
+
           if (st.todosRemaining === 0) {
             toast("prewalk: plan already completed in the frontier phase — no handoff needed", "success")
             await log("info", "prewalk: nothing left to hand off", { sessionID })
@@ -424,23 +473,27 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
             return
           }
           if (st.todosRemaining === 1) {
-            // P5: a single remaining todo is not worth a model swap. In auto mode
-            // defer a frontier continuation prompt to session.idle so the frontier's
-            // current turn completes. In manual mode stay passive with an honest toast.
+            // P5: a single remaining todo is not worth a model swap. Move to
+            // "executor" in BOTH modes: it arms completion detection, disarms
+            // the paused-phase legacy handlers, and makes /pw-go invalid (a
+            // handoff for one todo would contradict this very guardrail).
+            st.phase = "executor"
+            st.readyToSwap = false
             if (st.autoSwap) {
-              st.phase = "executor" // honorary "executor" so the completion toast fires when this todo resolves
-              st.readyToSwap = false
+              // Continuation deferred to session.idle so the frontier turn
+              // completes first.
               st.pendingFrontierContinue = true
             } else {
-              st.phase = "paused"
-              toast("prewalk: only 1 todo left — no handoff. Send any message to finish on the current agent, or tick the todo off manually.")
-              await log("info", "prewalk: 1 todo left — passive manual", { sessionID })
+              toast(
+                "prewalk: only 1 todo left — no handoff. Ask the model to finish it (any message stays on the agent selected in the TUI).",
+              )
+              await log("info", "prewalk: 1 todo left — finishing without handoff (manual)", { sessionID })
             }
             return
           }
 
           if (st.autoSwap) {
-            st.readyToSwap = true // P4: actually swap on session.idle, not mid-turn
+            st.readyToSwap = true // swap on session.idle, not mid-turn
             return
           }
 
@@ -458,7 +511,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           return
         }
 
-        // ---- user response at the checkpoint, and post-swap verification ----
+        // ---- legacy free-form confirmations at the checkpoint (deprecated) ----
         case "message.updated": {
           const info: Message | undefined = event.properties.info
           if (!info || info.role !== "user" || info.sessionID === undefined) return
@@ -488,33 +541,42 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           return
         }
 
+        // ---- end-of-turn work: deferred swap, single-todo continue, cleanup ----
         case "session.idle": {
           const sessionID = event.properties.sessionID
           const st = states.get(sessionID)
           if (!st) return
 
-          // P11: trivial path — frontier finished without ever adding a todo list.
+          // P11: trivial path — frontier finished without ever creating a todo
+          // list (the prompt-level escape). Close the run cleanly.
           if (st.phase === "frontier" && !st.pauseSeen && !st.frontierTodosEverSeen) {
             st.phase = "idle"
             await log("info", "prewalk: trivial path — protocol not engaged", { sessionID })
             return
           }
 
-          // P4 defense: the frontier produced a todo list but never the ⏸️ checkpoint.
-          if (st.phase === "frontier" && st.frontierTodosEverSeen && !st.pauseSeen && !st.anomalyWarned) {
-            st.anomalyWarned = true
-            toast("prewalk: checkpoint todo not detected — check the todo list format", "warning")
-            await log("warn", "prewalk: frontier finished with todos but no ⏸️ checkpoint", { sessionID })
+          // Anomaly: the frontier produced a todo list but never the ⏸️
+          // checkpoint. Warn once and close the run — leaving the state in
+          // "frontier" forever would make a much later ⏸️ todo resurrect it.
+          if (st.phase === "frontier" && st.frontierTodosEverSeen && !st.pauseSeen) {
+            if (!st.anomalyWarned) {
+              st.anomalyWarned = true
+              toast("prewalk: checkpoint todo not detected — check the todo list format", "warning")
+              await log("warn", "prewalk: frontier finished with todos but no ⏸️ checkpoint", { sessionID })
+            }
+            st.phase = "idle"
+            return
           }
 
-          // P4: deferred auto-swap once the frontier turn has fully completed.
+          // Deferred auto-swap once the frontier turn has fully completed.
           if (st.phase === "frontier" && st.autoSwap && st.readyToSwap) {
             st.readyToSwap = false
             await swapToExecutor(sessionID, st)
             return
           }
 
-          // P5: auto-mode continuation for the single-todo case (agent stays frontier).
+          // P5: auto-mode continuation for the single-todo case. No model
+          // swap: one todo does not justify it — stay on the frontier agent.
           if (st.phase === "executor" && st.pendingFrontierContinue) {
             st.pendingFrontierContinue = false
             await client.session
@@ -522,13 +584,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
                 path: { id: sessionID },
                 body: {
                   agent: AGENT_FRONTIER,
-                  parts: [
-                    {
-                      type: "text",
-                      text:
-                        "Only one todo remains: check off the ⏸️ PAUSE item and complete the last todo now, verifying it before marking it completed.",
-                    },
-                  ],
+                  parts: [{ type: "text", text: singleTodoContinue }],
                 },
               })
               .catch(async (e: unknown) => {
