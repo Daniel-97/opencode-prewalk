@@ -77,7 +77,7 @@ The installed version is the `VERSION` constant at the top of `prewalk.ts`. To c
 ## Limitations
 
 - **In-memory state:** prewalk's phase machine lives in the plugin process. A restart of OpenCode mid-prewalk loses it; resume manually by sending a continuation message (`/pw-go` or any prompt to the executor). The todo list and conversation context survive in the session.
-- **Checkpoint format:** the handoff gates on a todo whose content starts with `⏸️ PAUSE`, `PAUSE`, or `[PAUSE]` (uppercase). If the frontier emits it differently the protocol silently does not engage — the plugin warns on `session.idle` when a todo list exists without a detected checkpoint.
+- **Checkpoint format:** the handoff gates on a todo whose content starts with `⏸️` (with or without the word `PAUSE`), `PAUSE`, or `[PAUSE]` (uppercase). If the frontier emits it differently the protocol silently does not engage — the plugin warns on `session.idle` when a todo list exists without a detected checkpoint.
 - **Model pin required for savings:** without a pinned executor model (agent file or `prewalk.json` `executor` key) the handoff changes agent but not model — the cost savings do not apply.
 - **TUI agent selection is not switched by the plugin:** the handoff routes the kickoff turn (and everything the executor does inside it) to `prewalk-executor`, but messages you type by hand afterwards follow the agent currently selected in the TUI. If you keep working in the session after the handoff, select `prewalk-executor` (Tab) first.
 - **Invalid `/pw-go` / `/pw-revise` cannot be cancelled, only neutralized:** OpenCode always executes a command's turn; outside the ⏸️ checkpoint the plugin rewrites it into a one-line no-op and warns.
