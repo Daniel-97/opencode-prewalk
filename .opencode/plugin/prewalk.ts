@@ -29,6 +29,12 @@
  * "agent switched" marker, so they are called best-effort and never trusted
  * for the handoff itself.
  *
+ * Resume & recovery: if an executor run stops with todos remaining (abort,
+ * partial turn, question back to the user) the checkpoint is re-armed and
+ * `/pw-go` resumes it. If the plugin state is gone (OpenCode restart),
+ * `/pw-go` / `/pw-revise` reconstruct the checkpoint from the session's todo
+ * list (GET /session/{id}/todo) instead of refusing.
+ *
  * Hooks/events used: `config`, `command.execute.before`, and the stable events
  * `session.created`, `session.deleted`, `todo.updated`, `message.updated`,
  * `session.idle`.
@@ -66,6 +72,7 @@ interface PrewalkState {
   frontierTodosEverSeen?: boolean // P11: distinguish trivial path from anomaly
   anomalyWarned?: boolean // one-shot guard for the missing-checkpoint warning
   pendingFrontierContinue?: boolean // P5: single-todo auto continuation pending
+  executorEngaged?: boolean // F1: an executor turn actually ran (vs. bookkeeping-only "executor" phase)
 }
 
 interface PrewalkDefaults {
@@ -74,7 +81,7 @@ interface PrewalkDefaults {
   executor?: { providerID: string; modelID: string }
 }
 
-const VERSION = "0.3.0"
+const VERSION = "0.4.0"
 
 const DEFAULT_CONFIRMATIONS = [
   "continue",
@@ -257,6 +264,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
     }
 
     st.phase = "executor"
+    st.executorEngaged = true // F1: a real executor turn is about to run
 
     // 2) Kickoff with explicit per-turn agent+model — this is the override the
     //    V1 prompt path actually honors. NOTE: the V1 `model` shape is
@@ -276,6 +284,34 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
         toast("prewalk: handoff failed — continue manually on the executor agent", "warning")
         await log("warn", "prewalk: kickoff failed", { sessionID, error: `${e}` })
       })
+  }
+
+  /**
+   * F2: stateless checkpoint recovery. The phase machine is in-memory, so an
+   * OpenCode restart wipes it — but the todo list lives in the session. When a
+   * checkpoint command arrives with no usable state, rebuild it from
+   * GET /session/{id}/todo: a ⏸️ todo plus remaining items IS a checkpoint.
+   */
+  const recoverCheckpoint = async (sessionID: string): Promise<PrewalkState | undefined> => {
+    try {
+      const res = await client.session.todo({ path: { id: sessionID }, query: { directory: dir } })
+      const todos: Todo[] = res.data ?? []
+      const remaining = countRemaining(todos)
+      if (!todos.some(isPauseTodo) || remaining === 0) return undefined
+      const st: PrewalkState = {
+        ...initialState(defaults, false),
+        phase: "paused",
+        pauseSeen: true,
+        todosRemaining: remaining,
+      }
+      states.set(sessionID, st)
+      toast(`prewalk: checkpoint recovered from the session todo list (${remaining} remaining)`, "info")
+      await log("info", "prewalk: checkpoint recovered from session todos", { sessionID, remaining })
+      return st
+    } catch (e: unknown) {
+      await log("warn", "prewalk: checkpoint recovery failed", { sessionID, error: `${e}` })
+      return undefined
+    }
   }
 
   /** Fetch the text content of a message from the server. */
@@ -361,10 +397,18 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
       }
 
       const st = states.get(sessionID)
-      const atCheckpoint = st !== undefined && st.phase === "paused"
+      // F2: no state (post-restart) or a never-engaged "idle" state are the
+      // recoverable cases — try rebuilding the checkpoint from the session's
+      // todo list before refusing. A run in another phase is NOT recovered
+      // here: "frontier" means the plan is not ready, and "executor" is
+      // re-armed to "paused" by the session.idle handler (F1) when it stops.
+      let checkpoint = st !== undefined && st.phase === "paused" ? st : undefined
+      if (!checkpoint && (st === undefined || st.phase === "idle")) {
+        checkpoint = await recoverCheckpoint(sessionID)
+      }
 
       if (isGo) {
-        if (!atCheckpoint) {
+        if (!checkpoint) {
           neutralize(output, noActiveRunNoop)
           toast(
             "prewalk: /pw-go is only valid at the ⏸️ checkpoint — run /prewalk and wait for the PAUSE todo",
@@ -381,7 +425,8 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
           toast(noPinWarning, "warning")
           await log("warn", "prewalk: executor has no pinned model", { sessionID })
         }
-        st.phase = "executor"
+        checkpoint.phase = "executor"
+        checkpoint.executorEngaged = true // F1
         await log("info", "prewalk: /pw-go handoff", {
           sessionID,
           model: executorModel ? modelLabel(executorModel) : null,
@@ -390,7 +435,7 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
       }
 
       // isRevise
-      if (!atCheckpoint) {
+      if (!checkpoint) {
         neutralize(output, noActiveRunNoop)
         toast("prewalk: /pw-revise is only valid at the ⏸️ checkpoint — nothing to revise", "warning")
         await log("warn", "prewalk: /pw-revise outside checkpoint — neutralized", { sessionID })
@@ -591,6 +636,26 @@ export const PrewalkPlugin: Plugin = async ({ client, directory, serverUrl }) =>
                 toast("prewalk: auto-continue failed — finish the last todo manually", "warning")
                 await log("warn", "prewalk: single-todo continue failed", { sessionID, error: `${e}` })
               })
+            return
+          }
+
+          // F1: an executor turn ran but ended with todos remaining — abort,
+          // partial turn, or a question back to the user. Re-arm the
+          // checkpoint so /pw-go RESUMES instead of being neutralized. Never
+          // auto re-kickoff (an executor that keeps stopping would loop).
+          // `executorEngaged` keeps this from firing for the bookkeeping-only
+          // "executor" phase of the single-todo guardrail.
+          if (st.phase === "executor" && st.executorEngaged && st.todosRemaining > 0) {
+            st.phase = "paused"
+            st.executorEngaged = false
+            toast(
+              `prewalk: executor stopped with ${st.todosRemaining} todo(s) remaining — /pw-go to resume, /pw-revise to adjust`,
+              "warning",
+            )
+            await log("info", "prewalk: executor incomplete — checkpoint re-armed", {
+              sessionID,
+              remaining: st.todosRemaining,
+            })
             return
           }
 

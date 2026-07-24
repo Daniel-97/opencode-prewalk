@@ -53,7 +53,7 @@ Optional config `.opencode/prewalk.json` (see `prewalk.json.example` in this rep
 
 | Flag | Effect |
 |---|---|
-| *(none)* | **Manual mode (command-driven)**: at the ⏸️ checkpoint you get a toast; review the plan and task #1, then run `/pw-go` to hand off to the executor, or `/pw-revise <changes>` to update the plan on the frontier (typing a free-form "continue" still works as a deprecated fallback) |
+| *(none)* | **Manual mode (command-driven)**: at the ⏸️ checkpoint you get a toast; review the plan and task #1, then run `/pw-go` to hand off to the executor (it also resumes an interrupted executor run), or `/pw-revise <changes>` to update the plan on the frontier (typing a free-form "continue" still works as a deprecated fallback) |
 | `--no-pause` | **Auto-swap**: when the ⏸️ checkpoint todo is added, the plugin hands off to the `prewalk-executor` agent immediately (no waiting for confirmation) |
 
 Nothing else is selected via flags: the executor model comes from the `model:` pin in `prewalk-executor.md` or the `executor` key in `prewalk.json`; `maxTodos` (warning threshold) and the legacy `confirmations` set also live in `prewalk.json`.
@@ -76,11 +76,12 @@ The installed version is the `VERSION` constant at the top of `prewalk.ts`. To c
 
 ## Limitations
 
-- **In-memory state:** prewalk's phase machine lives in the plugin process. A restart of OpenCode mid-prewalk loses it; resume manually by sending a continuation message (`/pw-go` or any prompt to the executor). The todo list and conversation context survive in the session.
+- **In-memory state, with recovery:** prewalk's phase machine lives in the plugin process and a restart of OpenCode wipes it — but the todo list and conversation context survive in the session, and `/pw-go` / `/pw-revise` reconstruct the checkpoint from the session's todo list when the state is missing. Recovery requires the ⏸️ todo to still be in the list with items remaining; otherwise start a new `/prewalk`.
 - **Checkpoint format:** the handoff gates on a todo whose content starts with `⏸️` (with or without the word `PAUSE`), `PAUSE`, or `[PAUSE]` (uppercase). If the frontier emits it differently the protocol silently does not engage — the plugin warns on `session.idle` when a todo list exists without a detected checkpoint.
 - **Model pin required for savings:** without a pinned executor model (agent file or `prewalk.json` `executor` key) the handoff changes agent but not model — the cost savings do not apply.
 - **TUI agent selection is not switched by the plugin:** the handoff routes the kickoff turn (and everything the executor does inside it) to `prewalk-executor`, but messages you type by hand afterwards follow the agent currently selected in the TUI. If you keep working in the session after the handoff, select `prewalk-executor` (Tab) first.
 - **Invalid `/pw-go` / `/pw-revise` cannot be cancelled, only neutralized:** OpenCode always executes a command's turn; outside the ⏸️ checkpoint the plugin rewrites it into a one-line no-op and warns.
+- **Interrupted executor runs re-arm the checkpoint:** if the executor stops with todos remaining (you abort it, it ends a turn early, or it asks a question), the plugin re-arms the ⏸️ checkpoint and toasts — run `/pw-go` again to resume from where it stopped, or `/pw-revise` to adjust the plan first. It never re-kicks off by itself.
 
 ## Development
 
